@@ -1,0 +1,3 @@
+split,n_samples,chars_total,chars_mean,chars_min,chars_max,queries_n,queries_frac
+train,3762423,25870542904,6876.032520532646,465,100000,0,0.0
+test,4727,31718937,6710.162259361117,696,100000,0,0.0

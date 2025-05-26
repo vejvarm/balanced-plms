@@ -1,0 +1,3 @@
+split,n_samples,tokens_total,tokens_mean,tokens_min,tokens_max,queries_n,queries_frac
+train,8684583,4446506496,512.0,512,512,67006,0.0077155114989401336
+test,10851,5555712,512.0,512,512,85,0.007833379412035758
