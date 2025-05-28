@@ -1,4 +1,5 @@
 pretraining/wandb
+pretraining/datasets
 results
 .cache
 .conda
