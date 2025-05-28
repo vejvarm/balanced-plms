@@ -1,4 +1,5 @@
 import json
+import pathlib
 import torch
 from transformers import (
     AutoTokenizer,
@@ -35,12 +36,18 @@ else:
 with open(cfg_path, "r") as f:
     config_args = json.load(f)
 
-dataset_cache_path = config_args.get("dataset_cache_path", "/work/datasets/owt-10k-clean")
 max_seq_length = config_args.get("max_seq_length", 512)
 
 # 1. Load preprocessed dataset from disk
-print(f"Loading dataset from cache: {dataset_cache_path}")
-grouped_dataset = load_from_disk(dataset_cache_path)
+data_dir = pathlib.Path(config_args.get("dataset_cache_path", "/work/datasets/owt-10k-clean"))
+variant = config_args["dataset_variant"]
+train_path = data_dir.joinpath(variant, "grouped")
+dev_path = data_dir.joinpath("shared_dev")
+print(f"Loading dataset from train_path: `{train_path}` | dev_path: `{dev_path}`")
+train_dataset = load_from_disk(str(train_path))
+print(train_dataset)
+train_dataset = train_dataset["train"]
+eval_dataset = load_from_disk(str(dev_path))["dev"]
 
 # 2. Tokenizer initialization.
 tokenizer = AutoTokenizer.from_pretrained(config_args["model_name_or_path"])
@@ -60,9 +67,11 @@ data_collator = DataCollatorForT5MLM(
 config = AutoConfig.from_pretrained(config_args["model_name_or_path"])
 model = T5ForConditionalGeneration(config)
 
+out_dir = pathlib.Path(config_args["output_dir"]).joinpath(variant)
+
 # 5. Set up TrainingArguments.
 training_args = TrainingArguments(
-    output_dir=config_args["output_dir"],
+    output_dir=str(out_dir),
     do_train=config_args.get("do_train", True),
     do_eval=config_args.get("do_eval", True),
     num_train_epochs=config_args.get("num_train_epochs", 4),
@@ -93,8 +102,8 @@ training_args = TrainingArguments(
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=grouped_dataset["train"],
-    eval_dataset=grouped_dataset["test"],
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
     data_collator=data_collator,
     tokenizer=tokenizer,
 )

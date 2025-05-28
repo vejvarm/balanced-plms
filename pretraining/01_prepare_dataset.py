@@ -34,7 +34,7 @@ with open(cfg_path, "r") as f:
 cache_dir = config_args.get("cache_dir", "/work/datasets")
 dataset_source_path = config_args.get("dataset", "stas/openwebtext-10k")
 subdataset = config_args.get("subdataset", None)
-dataset_cache_path = config_args.get("dataset_cache_path", os.path.join(cache_dir, dataset_source_path+"-clean"))
+dataset_cache_path = config_args.get("dataset_cache_path", os.path.join(cache_dir, dataset_source_path+"-preproc"))  # changed "-clean" to "-preproc"
 max_seq_length = int(config_args.get("max_seq_length", 512))
 test_set_size = int(config_args.get("test_set_size", 10000))
 model_name = config_args["model_name_or_path"]
@@ -44,6 +44,7 @@ tokenizer.pad_token = tokenizer.eos_token  # T5 uses EOS as padding
 
 print(f"Downloading and preprocessing dataset to: {dataset_cache_path}")
 
+os.makedirs(dataset_cache_path, exist_ok=True)
 stats_rows = []
 
 ######################
@@ -57,6 +58,15 @@ raw_stats = {}
 tokens_full_per_split = {}
 docs_full_per_split = {}
 
+# Save shared dev BEFORE any filtering, for all future experiments!
+shared_dev_save_path = os.path.join(dataset_cache_path, "shared_dev")
+if "test" in dataset.keys():
+    os.makedirs(shared_dev_save_path, exist_ok=True)
+    save_dataset(DatasetDict({"dev": dataset["test"]}), shared_dev_save_path)
+    print(f"✅ Shared dev set saved at {shared_dev_save_path}")
+else:
+    print("Warning: No 'test' split to save as shared dev.")
+
 for split in dataset.keys():
     n_tokens, n_docs = count_tokens(dataset[split], tokenizer)
     tokens_full_per_split[split] = n_tokens
@@ -69,13 +79,6 @@ for split in dataset.keys():
         "dirty_supplement_from_clean_docs": "",
         "dirty_supplement_from_clean_tokens": ""
     })
-
-# Save shared dev split before filtering
-shared_dev_save_path = dataset_cache_path + "_shared_dev"
-if "test" in dataset.keys():
-    os.makedirs(os.path.dirname(shared_dev_save_path), exist_ok=True)
-    save_dataset(DatasetDict({"dev": dataset["test"]}), shared_dev_save_path)
-    print(f"✅ Shared dev set saved at {shared_dev_save_path}")
 
 ######################
 ### 2. FILTER & CLEAN STATS
@@ -102,7 +105,6 @@ clean_token_target = {split: filtered_stats_dict[split]["num_tokens"] for split 
 ######################
 ### 3. DIRTY-MATCHED CONSTRUCTION
 ######################
-
 def build_dirty_matched_set(dataset, filtered_out_indices, clean_token_target, filtered_indices_per_split, seed=42):
     random.seed(seed)
     dirty_dict = DatasetDict()
@@ -159,15 +161,17 @@ dirty_matched, dirty_supplement_stats = build_dirty_matched_set(
 ######################
 ### 4. TOKENIZE & GROUP ALL THREE DATASETS
 ######################
-def collect_stats_for_set(dataset_dict, dataset_type, ref_tokens_per_split, ref_docs_per_split, supplement_stats=None):
+def collect_stats_for_set(dataset_dict, dataset_type, ref_tokens_per_split, ref_docs_per_split, supplement_stats=None, save=True):
     rows = []
+    grouped = {}
     for split in dataset_dict.keys():
         n_docs = len(dataset_dict[split])
         n_tokens, _ = count_tokens(dataset_dict[split], tokenizer)
         # Get number of group blocks
         tknz = tokenize_dataset(DatasetDict({split: dataset_dict[split]}), tokenizer, num_proc=8)
-        grouped = group_texts(tknz, block_size=max_seq_length, num_proc=8)
+        grouped[split] = group_texts(tknz, block_size=max_seq_length, num_proc=8)[split]
         n_blocks = len(grouped[split])
+        os.makedirs(os.path.join(dataset_cache_path, dataset_type, "grouped"), exist_ok=True)
         row = {
             "dataset_type": dataset_type,
             "split": split, 
@@ -180,39 +184,29 @@ def collect_stats_for_set(dataset_dict, dataset_type, ref_tokens_per_split, ref_
             "dirty_supplement_from_clean_tokens": supplement_stats[split]['n_tokens_supplement'] if supplement_stats and split in supplement_stats else ""
         }
         rows.append(row)
+
+    if save:
+        save_dataset(DatasetDict(grouped), os.path.join(dataset_cache_path, dataset_type, "grouped"))
+    
     return rows
 
-# Tokenize/group/output for full, clean (filtered), and dirty matched
-stats_rows += collect_stats_for_set(dataset, "full", tokens_full_per_split, docs_full_per_split)
-# For clean, use the filtered dataset
-stats_rows += collect_stats_for_set(dataset_filtered, "clean", tokens_full_per_split, docs_full_per_split)
-# For dirty, use the dirty (composed) dataset and include supplement stats
-stats_rows += collect_stats_for_set(dirty_matched, "dirty", tokens_full_per_split, docs_full_per_split, dirty_supplement_stats)
+# Tokenize/group/save for full, clean, and dirtymatched
+stats_rows += collect_stats_for_set(dataset, "full", tokens_full_per_split, docs_full_per_split, save=False)
+stats_rows += collect_stats_for_set(dataset_filtered, "clean", tokens_full_per_split, docs_full_per_split, save=True)
+stats_rows += collect_stats_for_set(dirty_matched, "dirtymatched", tokens_full_per_split, docs_full_per_split, dirty_supplement_stats, save=True)
 
-# Save datasets (grouped set, clean grouped, dirty-matched grouped)
-# Saving the grouped versions:
-for ds_type, ds, suffix in [
-    ("filtered", dataset_filtered, "_clean"),
-    ("dirtymatched", dirty_matched, "_dirtymatched"),
-]:
-    tokenized = tokenize_dataset(ds, tokenizer, num_proc=8)
-    grouped = group_texts(tokenized, block_size=max_seq_length, num_proc=8)
-    save_dataset(grouped, dataset_cache_path + suffix)
-
-print(f"✅ Clean (filtered) and dirty-matched datasets prepared and saved.")
+print(f"✅ Clean (filtered), dirty-matched, and full datasets prepared and saved.")
 
 ######################
 ### 5. SAVE STATS AND BREAKDOWN
 ######################
 stats_path = os.path.join(dataset_cache_path, "preprocessing_stats.csv")
-os.makedirs(dataset_cache_path, exist_ok=True)
-fieldnames = [
-    "dataset_type", "split", "num_documents", "num_tokens", "num_blocks", 
-    "percent_tokens_relative_full", "percent_docs_relative_full",
-    "dirty_supplement_from_clean_docs", "dirty_supplement_from_clean_tokens"
-]
 with open(stats_path, "w", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer = csv.DictWriter(f, fieldnames=[
+        "dataset_type", "split", "num_documents", "num_tokens", "num_blocks",
+        "percent_tokens_relative_full", "percent_docs_relative_full",
+        "dirty_supplement_from_clean_docs", "dirty_supplement_from_clean_tokens"
+    ])
     writer.writeheader()
     writer.writerows(stats_rows)
 print(f"✅ Stats table saved at {stats_path}")
