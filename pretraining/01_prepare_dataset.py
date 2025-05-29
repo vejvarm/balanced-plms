@@ -4,9 +4,13 @@ import os
 import random
 from transformers import AutoTokenizer
 from data_utils import (
+    annotate_datasetdict_parallel,
+    build_dirty_matched_set,
+    collect_stats_for_set,
     count_tokens,
+    filter_and_collect_stats,
+    keep_only_text,
     load_and_split_data,
-    filter_dataset_with_stats,
     tokenize_dataset,
     group_texts,
     save_dataset
@@ -83,12 +87,25 @@ for split in dataset.keys():
 ######################
 ### 2. FILTER & CLEAN STATS
 ######################
-dataset_filtered, filter_stats, filtered_out_indices, filtered_indices_per_split = \
-    filter_dataset_with_stats(dataset, tokenizer, example_cap=args.example_cap)
-filtered_stats_dict = {}
+# Step 1: Annotate in parallel
+annotated_dataset = annotate_datasetdict_parallel(dataset, tokenizer)
 
-for split in dataset_filtered.keys():
-    n_tokens, n_docs = count_tokens(dataset_filtered[split], tokenizer)
+# Step 2: Filter and get stats
+dataset_filtered, filter_stats, filtered_out_indices, filtered_indices_per_split = filter_and_collect_stats(
+    annotated_dataset, example_cap=args.example_cap
+)
+
+dataset_filtered_clean = DatasetDict({
+    k: v.map(keep_only_text, remove_columns=[col for col in v.column_names if col != "text"])
+    for k, v in dataset_filtered.items()
+})
+
+######################
+### 2.5. CLEAN STATS & CLEAN TOKEN TARGET
+######################
+filtered_stats_dict = {}
+for split in dataset_filtered_clean.keys():
+    n_tokens, n_docs = count_tokens(dataset_filtered_clean[split], tokenizer)
     filtered_stats_dict[split] = {"num_tokens": n_tokens, "num_documents": n_docs}
     percent_tokens_full = n_tokens / tokens_full_per_split[split] if tokens_full_per_split[split] else ""
     percent_docs_full = n_docs / docs_full_per_split[split] if docs_full_per_split[split] else ""
@@ -105,55 +122,6 @@ clean_token_target = {split: filtered_stats_dict[split]["num_tokens"] for split 
 ######################
 ### 3. DIRTY-MATCHED CONSTRUCTION
 ######################
-def build_dirty_matched_set(dataset, filtered_out_indices, clean_token_target, filtered_indices_per_split, seed=42):
-    random.seed(seed)
-    dirty_dict = DatasetDict()
-    supplement_stats_per_split = {}
-    for split in filtered_out_indices:
-        data = dataset[split]
-        dirty_info = filtered_out_indices[split]
-        random.shuffle(dirty_info)
-        selected_dirty = []
-        total_tokens = 0
-        for entry in dirty_info:
-            if total_tokens >= clean_token_target[split]:
-                break
-            selected_dirty.append(entry["idx"])
-            total_tokens += entry["tokens"]
-        # Supplement with random clean if needed
-        n_tokens_dirty = total_tokens
-        n_docs_dirty = len(selected_dirty)
-        supplement_indices = []
-        supplement_tokens = 0
-        supplement_docs = 0
-        if total_tokens < clean_token_target[split]:
-            needed = clean_token_target[split] - total_tokens
-            all_clean_indices = set(filtered_indices_per_split[split])
-            dirty_indices_set = set(e["idx"] for e in dirty_info)
-            eligible_clean_indices = list(all_clean_indices - dirty_indices_set)
-            random.shuffle(eligible_clean_indices)
-            for i in eligible_clean_indices:
-                ex_len = len(data[i]["text"])
-                supplement_indices.append(i)
-                supplement_tokens += len(data[i]["text"])
-                supplement_docs += 1
-                if total_tokens + supplement_tokens >= clean_token_target[split]:
-                    break
-            all_indices = selected_dirty + supplement_indices
-        else:
-            supplement_tokens = 0
-            supplement_docs = 0
-            all_indices = selected_dirty
-        supplement_stats_per_split[split] = {
-            "n_docs_dirty": n_docs_dirty, 
-            "n_tokens_dirty": n_tokens_dirty,
-            "n_docs_supplement": supplement_docs, 
-            "n_tokens_supplement": supplement_tokens,
-            "n_total": len(all_indices)
-        }
-        dirty_dict[split] = data.select(all_indices)
-    return dirty_dict, supplement_stats_per_split
-
 dirty_matched, dirty_supplement_stats = build_dirty_matched_set(
     dataset, filtered_out_indices, clean_token_target, filtered_indices_per_split, seed=args.seed
 )
@@ -161,39 +129,9 @@ dirty_matched, dirty_supplement_stats = build_dirty_matched_set(
 ######################
 ### 4. TOKENIZE & GROUP ALL THREE DATASETS
 ######################
-def collect_stats_for_set(dataset_dict, dataset_type, ref_tokens_per_split, ref_docs_per_split, supplement_stats=None, save=True):
-    rows = []
-    grouped = {}
-    for split in dataset_dict.keys():
-        n_docs = len(dataset_dict[split])
-        n_tokens, _ = count_tokens(dataset_dict[split], tokenizer)
-        # Get number of group blocks
-        tknz = tokenize_dataset(DatasetDict({split: dataset_dict[split]}), tokenizer, num_proc=8)
-        grouped[split] = group_texts(tknz, block_size=max_seq_length, num_proc=8)[split]
-        n_blocks = len(grouped[split])
-        os.makedirs(os.path.join(dataset_cache_path, dataset_type, "grouped"), exist_ok=True)
-        row = {
-            "dataset_type": dataset_type,
-            "split": split, 
-            "num_documents": n_docs,
-            "num_tokens": n_tokens,
-            "num_blocks": n_blocks,
-            "percent_tokens_relative_full": n_tokens / ref_tokens_per_split[split] if ref_tokens_per_split[split] else "",
-            "percent_docs_relative_full": n_docs / ref_docs_per_split[split] if ref_docs_per_split[split] else "",
-            "dirty_supplement_from_clean_docs": supplement_stats[split]['n_docs_supplement'] if supplement_stats and split in supplement_stats else "",
-            "dirty_supplement_from_clean_tokens": supplement_stats[split]['n_tokens_supplement'] if supplement_stats and split in supplement_stats else ""
-        }
-        rows.append(row)
-
-    if save:
-        save_dataset(DatasetDict(grouped), os.path.join(dataset_cache_path, dataset_type, "grouped"))
-    
-    return rows
-
-# Tokenize/group/save for full, clean, and dirtymatched
-stats_rows += collect_stats_for_set(dataset, "full", tokens_full_per_split, docs_full_per_split, save=False)
-stats_rows += collect_stats_for_set(dataset_filtered, "clean", tokens_full_per_split, docs_full_per_split, save=True)
-stats_rows += collect_stats_for_set(dirty_matched, "dirtymatched", tokens_full_per_split, docs_full_per_split, dirty_supplement_stats, save=True)
+stats_rows += collect_stats_for_set(dataset, "full", tokens_full_per_split, docs_full_per_split, tokenizer, save=False, dataset_cache_path=dataset_cache_path)
+stats_rows += collect_stats_for_set(dataset_filtered_clean, "clean", tokens_full_per_split, docs_full_per_split, tokenizer, save=True, dataset_cache_path=dataset_cache_path)
+stats_rows += collect_stats_for_set(dirty_matched, "dirtymatched", tokens_full_per_split, docs_full_per_split, tokenizer, dirty_supplement_stats, save=True, dataset_cache_path=dataset_cache_path)
 
 print(f"✅ Clean (filtered), dirty-matched, and full datasets prepared and saved.")
 
