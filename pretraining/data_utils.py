@@ -10,6 +10,9 @@ from tqdm import tqdm
 import multiprocessing
 NUM_PROC = min(24, multiprocessing.cpu_count())
 WITH_INDICES = False
+LOAD_FROM_CACHE_FILE = False
+KEEP_IN_MEMORY = False
+
 print(f"Using `{NUM_PROC}` processors.")
 
 # Patterns for query languages and their names
@@ -165,6 +168,8 @@ def annotate_dataset_parallel(dataset, tokenizer, num_proc=NUM_PROC):
         batched=True,
         batch_size=1000,
         num_proc=num_proc,
+        load_from_cache_file=LOAD_FROM_CACHE_FILE,
+        keep_in_memory=KEEP_IN_MEMORY,
         desc="Annotate & count tokens"
     )
 
@@ -187,7 +192,9 @@ def tokenize_dataset(dataset, tokenizer, num_proc=NUM_PROC, with_indices=WITH_IN
         columns = dataset[split_name].column_names
     else:  # Single Dataset
         columns = dataset.column_names
-    return dataset.map(tokenize_function, batched=True, num_proc=num_proc, remove_columns=columns, with_indices=with_indices)
+    return dataset.map(tokenize_function, batched=True, num_proc=num_proc, remove_columns=columns, with_indices=with_indices,
+        load_from_cache_file=LOAD_FROM_CACHE_FILE,
+        keep_in_memory=KEEP_IN_MEMORY,)
 
 def group_texts(tokenized_dataset, block_size=512, num_proc=NUM_PROC, with_indices=WITH_INDICES):
     def group_texts_fn(examples):
@@ -202,7 +209,9 @@ def group_texts(tokenized_dataset, block_size=512, num_proc=NUM_PROC, with_indic
         }
         return result
 
-    return tokenized_dataset.map(group_texts_fn, batched=True, num_proc=num_proc, with_indices=with_indices)
+    return tokenized_dataset.map(group_texts_fn, batched=True, num_proc=num_proc, with_indices=with_indices,
+        load_from_cache_file=LOAD_FROM_CACHE_FILE,
+        keep_in_memory=KEEP_IN_MEMORY)
 
 def save_dataset(dataset, path):
     dataset.save_to_disk(path)
@@ -239,6 +248,8 @@ def count_tokens(dataset: DatasetDict | Dataset, tokenizer, num_proc=NUM_PROC, b
         batch_size=batch_size,
         num_proc=num_proc,
         remove_columns=[],
+        load_from_cache_file=LOAD_FROM_CACHE_FILE,
+        keep_in_memory=KEEP_IN_MEMORY,
         desc=f"Counting tokens."
     )
     total_tokens = sum(mapped["num_tokens"])

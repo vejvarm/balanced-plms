@@ -1,4 +1,5 @@
 import csv
+import gc
 import json
 import os
 import random
@@ -13,7 +14,9 @@ from data_utils import (
     load_and_split_data,
     tokenize_dataset,
     group_texts,
-    save_dataset
+    save_dataset,
+    LOAD_FROM_CACHE_FILE,
+    KEEP_IN_MEMORY
 )
 import argparse
 from datasets import DatasetDict
@@ -49,7 +52,36 @@ tokenizer.pad_token = tokenizer.eos_token  # T5 uses EOS as padding
 print(f"Downloading and preprocessing dataset to: {dataset_cache_path}")
 
 os.makedirs(dataset_cache_path, exist_ok=True)
-stats_rows = []
+STATS_PATH = os.path.join(dataset_cache_path, "preprocessing_stats.csv")
+STATS_ROWS = []
+
+
+
+def init_stat(stats_path=STATS_PATH):
+    with open(stats_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=[
+            "dataset_type", "split", "num_documents", "num_tokens", "num_blocks",
+            "percent_tokens_relative_full", "percent_docs_relative_full",
+            "dirty_supplement_from_clean_docs", "dirty_supplement_from_clean_tokens"
+        ])
+        writer.writeheader()
+
+
+def append_and_save_stat(row: dict | list[dict], stats_path=STATS_PATH):
+    if isinstance(row, dict):
+        row = [row]
+    with open(stats_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=[
+            "dataset_type", "split", "num_documents", "num_tokens", "num_blocks",
+            "percent_tokens_relative_full", "percent_docs_relative_full",
+            "dirty_supplement_from_clean_docs", "dirty_supplement_from_clean_tokens"
+        ])
+        writer.writerows(row)
+
+
+### 0. Initialize stats file
+init_stat()
+
 
 ######################
 ### 1. LOAD & RAW STATS
@@ -75,14 +107,6 @@ for split in dataset.keys():
     n_tokens, n_docs = count_tokens(dataset[split], tokenizer)
     tokens_full_per_split[split] = n_tokens
     docs_full_per_split[split] = n_docs
-    stats_rows.append({
-        "dataset_type": "full", "split": split, 
-        "num_documents": n_docs, "num_tokens": n_tokens, "num_blocks": "",
-        "percent_tokens_relative_full": 1.0,
-        "percent_docs_relative_full": 1.0,
-        "dirty_supplement_from_clean_docs": "",
-        "dirty_supplement_from_clean_tokens": ""
-    })
 
 ######################
 ### 2. FILTER & CLEAN STATS
@@ -95,8 +119,11 @@ dataset_filtered, filter_stats, filtered_out_indices, filtered_indices_per_split
     annotated_dataset, example_cap=args.example_cap
 )
 
+del annotated_dataset
+gc.collect()
+
 dataset_filtered_clean = DatasetDict({
-    k: v.map(keep_only_text, remove_columns=[col for col in v.column_names if col != "text"])
+    k: v.map(keep_only_text, remove_columns=[col for col in v.column_names if col != "text"], load_from_cache_file=LOAD_FROM_CACHE_FILE, keep_in_memory=KEEP_IN_MEMORY)
     for k, v in dataset_filtered.items()
 })
 
@@ -109,15 +136,17 @@ for split in dataset_filtered_clean.keys():
     filtered_stats_dict[split] = {"num_tokens": n_tokens, "num_documents": n_docs}
     percent_tokens_full = n_tokens / tokens_full_per_split[split] if tokens_full_per_split[split] else ""
     percent_docs_full = n_docs / docs_full_per_split[split] if docs_full_per_split[split] else ""
-    stats_rows.append({
-        "dataset_type": "clean", "split": split, 
-        "num_documents": n_docs, "num_tokens": n_tokens, "num_blocks": "",
-        "percent_tokens_relative_full": percent_tokens_full,
-        "percent_docs_relative_full": percent_docs_full,
-        "dirty_supplement_from_clean_docs": "",
-        "dirty_supplement_from_clean_tokens": ""
-    })
 clean_token_target = {split: filtered_stats_dict[split]["num_tokens"] for split in filtered_stats_dict}
+
+# SAVE STATS FOR FULL DATASET
+append_and_save_stat(collect_stats_for_set(dataset, "full", tokens_full_per_split, docs_full_per_split, tokenizer, save=False, dataset_cache_path=dataset_cache_path))
+print(f"✅ Full dataset prepared and saved.")
+
+# SAVE STATS FOR CLEAN DATASET
+append_and_save_stat(collect_stats_for_set(dataset_filtered_clean, "clean", tokens_full_per_split, docs_full_per_split, tokenizer, save=True, dataset_cache_path=dataset_cache_path))
+del dataset_filtered_clean
+gc.collect()
+print(f"✅ Clean (filtered) dataset prepared and saved.")
 
 ######################
 ### 3. DIRTY-MATCHED CONSTRUCTION
@@ -126,28 +155,17 @@ dirty_matched, dirty_supplement_stats = build_dirty_matched_set(
     dataset, filtered_out_indices, clean_token_target, filtered_indices_per_split, seed=args.seed
 )
 
-######################
-### 4. TOKENIZE & GROUP ALL THREE DATASETS
-######################
-stats_rows += collect_stats_for_set(dataset, "full", tokens_full_per_split, docs_full_per_split, tokenizer, save=False, dataset_cache_path=dataset_cache_path)
-stats_rows += collect_stats_for_set(dataset_filtered_clean, "clean", tokens_full_per_split, docs_full_per_split, tokenizer, save=True, dataset_cache_path=dataset_cache_path)
-stats_rows += collect_stats_for_set(dirty_matched, "dirtymatched", tokens_full_per_split, docs_full_per_split, tokenizer, dirty_supplement_stats, save=True, dataset_cache_path=dataset_cache_path)
-
-print(f"✅ Clean (filtered), dirty-matched, and full datasets prepared and saved.")
+# delete full dataset to clear memory
+del dataset
+gc.collect()
 
 ######################
-### 5. SAVE STATS AND BREAKDOWN
+### 4. TOKENIZE & GROUP DIRTY-MATCHED DATASET
 ######################
-stats_path = os.path.join(dataset_cache_path, "preprocessing_stats.csv")
-with open(stats_path, "w", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=[
-        "dataset_type", "split", "num_documents", "num_tokens", "num_blocks",
-        "percent_tokens_relative_full", "percent_docs_relative_full",
-        "dirty_supplement_from_clean_docs", "dirty_supplement_from_clean_tokens"
-    ])
-    writer.writeheader()
-    writer.writerows(stats_rows)
-print(f"✅ Stats table saved at {stats_path}")
+append_and_save_stat(collect_stats_for_set(dirty_matched, "dirtymatched", tokens_full_per_split, docs_full_per_split, tokenizer, dirty_supplement_stats, save=True, dataset_cache_path=dataset_cache_path))
+del dirty_matched
+gc.collect()
+print(f"✅ Dirty-matched dataset prepared and saved.")
 
 # Save per-filter breakdown
 with open(os.path.join(dataset_cache_path, "filter_breakdown.json"), "w") as f:
