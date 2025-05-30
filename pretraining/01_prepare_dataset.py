@@ -108,6 +108,9 @@ for split in dataset.keys():
     tokens_full_per_split[split] = n_tokens
     docs_full_per_split[split] = n_docs
 
+append_and_save_stat(collect_stats_for_set({"test": dataset["test"]}, "full", tokens_full_per_split, docs_full_per_split, tokenizer, save=True, dataset_cache_path=dataset_cache_path))
+print(f"✅ Full dataset test set prepared and saved.")
+
 ######################
 ### 2. FILTER & CLEAN STATS
 ######################

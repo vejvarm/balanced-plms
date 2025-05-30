@@ -8,7 +8,7 @@ from collections import defaultdict, Counter
 from tqdm import tqdm
 
 import multiprocessing
-NUM_PROC = min(24, multiprocessing.cpu_count())
+NUM_PROC = min(32, multiprocessing.cpu_count())
 WITH_INDICES = False
 LOAD_FROM_CACHE_FILE = False
 KEEP_IN_MEMORY = False
