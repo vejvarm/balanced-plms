@@ -103,6 +103,9 @@ if "test" in dataset.keys():
 else:
     print("Warning: No 'test' split to save as shared dev.")
 
+append_and_save_stat(collect_stats_for_set({"test": dataset["test"]}, "full", tokens_full_per_split, docs_full_per_split, tokenizer, save=True, dataset_cache_path=dataset_cache_path))
+print(f"✅ Full dataset test set prepared and saved.")
+
 for split in dataset.keys():
     n_tokens, n_docs = count_tokens(dataset[split], tokenizer)
     tokens_full_per_split[split] = n_tokens
