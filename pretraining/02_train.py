@@ -94,7 +94,7 @@ training_args = TrainingArguments(
     evaluation_strategy="steps",
     metric_for_best_model="loss",
     greater_is_better=False,
-    fp16=False,  # Recommended if GPU supports mixed precision
+    fp16=config_args.get("fp16", False),  # Recommended if GPU supports mixed precision
     logging_dir="../logs",
     report_to=["wandb"],
 )
