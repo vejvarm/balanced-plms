@@ -309,7 +309,7 @@ def build_dirty_matched_set(dataset, filtered_out_indices, clean_token_target, f
     return dirty_dict, supplement_stats_per_split
 
 
-def collect_stats_for_set(dataset_dict, dataset_type, ref_tokens_per_split, ref_docs_per_split, tokenizer, supplement_stats=None, save=True, dataset_cache_path=None, max_seq_length=512):
+def collect_stats_for_set(dataset_dict, dataset_type, ref_tokens_per_split, ref_docs_per_split, tokenizer, supplement_stats=None, save=True, dataset_cache_path=None, max_seq_length=512, num_proc=NUM_PROC):
     if dataset_cache_path is None:
         raise NotImplementedError("You must provide dataset_cache_path.")
     rows = []
@@ -318,8 +318,8 @@ def collect_stats_for_set(dataset_dict, dataset_type, ref_tokens_per_split, ref_
         n_docs = len(dataset_dict[split])
         n_tokens, _ = count_tokens(dataset_dict[split], tokenizer)
         # Get number of group blocks
-        tknz = tokenize_dataset(DatasetDict({split: dataset_dict[split]}), tokenizer)
-        grouped[split] = group_texts(tknz, block_size=max_seq_length)[split]
+        tknz = tokenize_dataset(DatasetDict({split: dataset_dict[split]}), tokenizer, num_proc=num_proc)
+        grouped[split] = group_texts(tknz, block_size=max_seq_length, num_proc=num_proc)[split]
         n_blocks = len(grouped[split])
         if save and dataset_cache_path:
             os.makedirs(os.path.join(dataset_cache_path, dataset_type, "grouped"), exist_ok=True)
