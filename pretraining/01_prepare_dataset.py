@@ -12,18 +12,19 @@ from data_utils import (
     filter_and_collect_stats,
     keep_only_text,
     load_and_split_data,
-    tokenize_dataset,
     group_texts,
     save_dataset,
     LOAD_FROM_CACHE_FILE,
     KEEP_IN_MEMORY
 )
 import argparse
+import multiprocessing
 from datasets import DatasetDict
 
 parser = argparse.ArgumentParser(description="Prepare, filter, and analyze datasets (full, clean, dirty).")
 parser.add_argument("ds", type=str, help="Dataset to be prepared.", choices=("openwebtext", "openwebtext-10k", "realnewslike"))
 parser.add_argument("--example-cap", type=int, default=20, help="Number of example dirty texts to save for each trigger/lang combo.")
+parser.add_argument("--max-num-proc", type=int, default=multiprocessing.cpu_count(), help="Limit the maximum number of processors available.")
 parser.add_argument("--seed", type=int, default=42)
 args = parser.parse_args()
 
@@ -104,7 +105,7 @@ else:
     print("Warning: No 'test' split to save as shared dev.")
 
 for split in dataset.keys():
-    n_tokens, n_docs = count_tokens(dataset[split], tokenizer)
+    n_tokens, n_docs = count_tokens(dataset[split], tokenizer, num_proc=args.max_num_proc)
     tokens_full_per_split[split] = n_tokens
     docs_full_per_split[split] = n_docs
 
@@ -135,7 +136,7 @@ dataset_filtered_clean = DatasetDict({
 ######################
 filtered_stats_dict = {}
 for split in dataset_filtered_clean.keys():
-    n_tokens, n_docs = count_tokens(dataset_filtered_clean[split], tokenizer)
+    n_tokens, n_docs = count_tokens(dataset_filtered_clean[split], tokenizer, num_proc=max_num_proc)
     filtered_stats_dict[split] = {"num_tokens": n_tokens, "num_documents": n_docs}
     percent_tokens_full = n_tokens / tokens_full_per_split[split] if tokens_full_per_split[split] else ""
     percent_docs_full = n_docs / docs_full_per_split[split] if docs_full_per_split[split] else ""
