@@ -136,7 +136,7 @@ dataset_filtered_clean = DatasetDict({
 ######################
 filtered_stats_dict = {}
 for split in dataset_filtered_clean.keys():
-    n_tokens, n_docs = count_tokens(dataset_filtered_clean[split], tokenizer, num_proc=max_num_proc)
+    n_tokens, n_docs = count_tokens(dataset_filtered_clean[split], tokenizer, num_proc=args.max_num_proc)
     filtered_stats_dict[split] = {"num_tokens": n_tokens, "num_documents": n_docs}
     percent_tokens_full = n_tokens / tokens_full_per_split[split] if tokens_full_per_split[split] else ""
     percent_docs_full = n_docs / docs_full_per_split[split] if docs_full_per_split[split] else ""

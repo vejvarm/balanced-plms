@@ -81,6 +81,7 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=config_args.get("gradient_accumulation_steps", 4),
     learning_rate=config_args.get("learning_rate", 3e-4),
     lr_scheduler_type=config_args.get("lr_scheduler_type", "constant"),
+    warmup_steps=config_args.get("num_warmup_steps", 0),
     weight_decay=config_args.get("weight_decay", 0.01),
     logging_steps=config_args.get("logging_steps", 40),
     eval_steps=config_args.get("eval_steps", 200),
