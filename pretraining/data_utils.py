@@ -10,7 +10,7 @@ from tqdm import tqdm
 import multiprocessing
 NUM_PROC = min(32, multiprocessing.cpu_count())
 WITH_INDICES = False
-LOAD_FROM_CACHE_FILE = False
+LOAD_FROM_CACHE_FILE = True
 KEEP_IN_MEMORY = False
 
 print(f"Using `{NUM_PROC}` processors.")
@@ -25,7 +25,7 @@ QL_PATTERNS = [
 ]
 
 def load_and_split_data(dataset: str, subdataset: str | None, cache_dir, split_fraction: str, test_size: str) -> Dataset | DatasetDict:
-    dataset: Dataset | DatasetDict = load_dataset(dataset, subdataset, split=split_fraction, cache_dir=cache_dir, trust_remote_code=True)
+    dataset: Dataset | DatasetDict = load_dataset(dataset, subdataset, split=split_fraction, cache_dir=cache_dir, trust_remote_code=True, streaming=True)
     return dataset.train_test_split(test_size=test_size, writer_batch_size=100000)
 
 

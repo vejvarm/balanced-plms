@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 
 
 # How many steps per epoch
-STEPS_PER_EPOCH = 22616
+STEPS_PER_EPOCH = 31501*2 # 22616
 
 def plot_from_trainer_state(path_to_trainer_state_json: str | Path):
     path_to_file = Path(path_to_trainer_state_json)
