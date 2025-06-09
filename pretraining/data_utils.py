@@ -25,7 +25,6 @@ QL_PATTERNS = [
     # (r"(db\.\w+\.[^;]+)", "MQL"),   # MQL (https://github.com/jf87/SM3-Text-to-Query/blob/main/src/evaluation/DB_query.py)
 ]
 
-
 def load_config(ds: str) -> dict:
     cfg_mapping = {
         "openwebtext": "./configs/00_config_openwebtext.json",
@@ -36,7 +35,6 @@ def load_config(ds: str) -> dict:
         return json.load(f)
 
 def get_dataset_len(dataset_path, split='train'):
-    # Load just enough to get the length (uses cache if possible)
     dataset = load_dataset(dataset_path, split=split)
     return len(dataset)
 
@@ -47,16 +45,11 @@ def load_and_split_data(dataset: str, subdataset: str | None, cache_dir, split_f
     dataset: Dataset | DatasetDict = load_dataset(dataset, subdataset, split=split_fraction, cache_dir=cache_dir, trust_remote_code=True, streaming=True)
     return dataset.train_test_split(test_size=test_size, writer_batch_size=100000)
 
-
 def chunked_annotate_and_filter(
     dataset_path, chunk_ranges, output_dir, tokenizer, batch_size=64, num_proc=1
 ):
-    """
-    For each chunk, annotate, filter, and save the clean chunk to disk.
-    """
     import gc
     from datasets import load_from_disk
-
     os.makedirs(output_dir, exist_ok=True)
     ds = load_from_disk(dataset_path)
     for chunk_id, (start, end) in enumerate(chunk_ranges):
@@ -67,7 +60,6 @@ def chunked_annotate_and_filter(
             continue
         print(f"\n==> Processing chunk {chunk_id} [{start}:{end}] ...")
         chunk_ds = ds.select(range(start, end))
-        # Annotate (tokenization is included)
         annotated = chunk_ds.map(
             lambda batch: filter_and_annotate(batch, tokenizer=tokenizer),
             batched=True,
@@ -77,7 +69,6 @@ def chunked_annotate_and_filter(
             keep_in_memory=False,
             desc="Annotate & count tokens"
         )
-        # Filter out lines with query language patterns
         filters = annotated["filters_triggered"]
         to_keep = []
         dirty_indices = []
@@ -86,8 +77,6 @@ def chunked_annotate_and_filter(
                 to_keep.append(i)
             else:
                 dirty_indices.append(i)
-        # to_keep = [i for i, f in enumerate(filters) if not f]
-        # dirty_indices = [i for i, f in enumerate(filters) if f]
         clean = annotated.select(to_keep).map(
             keep_only_text,
             remove_columns=[c for c in annotated.column_names if c != "text"],
@@ -100,7 +89,6 @@ def chunked_annotate_and_filter(
             load_from_cache_file=False,
             keep_in_memory=False,
         )
-        # Save these chunks
         os.makedirs(chunk_dir, exist_ok=True)
         clean.save_to_disk(os.path.join(chunk_dir, "clean"))
         print(f"✅ Saved clean chunk {chunk_id}: {len(clean)} examples")
@@ -108,51 +96,13 @@ def chunked_annotate_and_filter(
         print(f"✅ Saved dirty chunk {chunk_id}: {len(dirty)} examples")
         with open(done_path, "w") as f:
             f.write("done")
-        # Memory management
         del chunk_ds, annotated, clean, dirty
         gc.collect()
 
-
-# Keyword filter (count tokens matched)
 query_keywords = [
     "SELECT", "MATCH", "WHERE", "JOIN", "OPTIONAL", "FILTER",
     "RETURN", "INSERT", "DELETE", "SQL", "SPARQL", "CYPHER"
 ]
-
-import os
-import gc
-
-def process_chunk(dataset_path, split, start, end, chunk_id, output_base, tokenizer, args):
-    chunk_out_dir = os.path.join(output_base, f"chunk_{chunk_id:05d}")
-    if os.path.exists(chunk_out_dir):
-        print(f"Chunk {chunk_id} already processed, skipping.")
-        return
-
-    print(f"Processing chunk {chunk_id}: [{start}:{end}]")
-    ds = load_dataset(dataset_path, split=f"{split}[{start}:{end}]")
-    # 1. Annotate (filter_and_annotate)
-    annotated = ds.map(
-        lambda batch: filter_and_annotate(batch, tokenizer=tokenizer),
-        batched=True,
-        batch_size=args.batch_size,
-        num_proc=args.num_proc,
-        load_from_cache_file=False,
-        keep_in_memory=False,
-        desc="Annotate & count tokens"
-    )
-    # 2. Filter/clean (your filter_and_collect_stats)
-    #    For a single chunk, can just filter "in place"
-    filters = annotated['filters_triggered']
-    to_keep = [i for i, f in enumerate(filters) if not f]
-    clean = annotated.select(to_keep).map(keep_only_text, remove_columns=[c for c in annotated.column_names if c != "text"])
-    # 3. Save to disk
-    os.makedirs(chunk_out_dir, exist_ok=True)
-    clean.save_to_disk(os.path.join(chunk_out_dir, "clean"))
-    # Save stats (optional)
-    # Save annotation or filter results if needed
-    del ds, annotated, clean
-    gc.collect()
-
 
 def filter_and_annotate(examples, tokenizer=None):
     texts = examples["text"]
@@ -162,12 +112,10 @@ def filter_and_annotate(examples, tokenizer=None):
     ql_type_list = []
     matched_substring_list = []
     keyword_counts_list = []
-
     for text in texts:
         filters_triggered = []
         ql_type = None
         matched_substring = None
-
         tokens_upper = re.findall(r'\w+', text.upper())
         token_counts = Counter(tokens_upper)
         keyword_counts = {kw: token_counts[kw] for kw in query_keywords if token_counts[kw] > 0}
@@ -180,7 +128,6 @@ def filter_and_annotate(examples, tokenizer=None):
                 ql_type = lang
                 matched_substring = match.group(0)
                 break
-
         filters_triggered_list.append(filters_triggered)
         ql_type_list.append(ql_type or "")
         matched_substring_list.append(matched_substring or "")
@@ -193,148 +140,16 @@ def filter_and_annotate(examples, tokenizer=None):
         "num_tokens": num_tokens,
     }
 
-
-
-def filter_and_collect_stats(annotated_ds, example_cap=10):
-    """
-    Filters the dataset and simultaneously collects filter statistics.
-    Returns: filtered_dataset (matching original HF DatasetDict), filter_stats dictionary
-    """
-    if isinstance(annotated_ds, DatasetDict):
-        result_dict = {}
-        stats_dict = defaultdict(lambda: defaultdict(lambda: {"count": 0, "tokens": 0, "examples": [], "keyword_counts": {k:0 for k in query_keywords}}))
-        filtered_indices_per_split = {}
-        filtered_out_indices = defaultdict(list)
-        for split, ds in annotated_ds.items():
-            keep_indices = []
-            # Convert columns to list once for fast access
-            filters_triggered_list = ds["filters_triggered"]
-            ql_type_list = ds["ql_type"]
-            matched_substring_list = ds["matched_substring"]
-            keyword_counts_list = ds["keyword_counts"]
-            num_tokens_list = ds["num_tokens"]
-            text_list = ds["text"]
-            for i in tqdm(range(len(ds)), desc=f"Filtering/stats for `{split}`"):
-                filters_trig = filters_triggered_list[i]
-                ql_type = ql_type_list[i] or "unknown"
-                matched_substring = matched_substring_list[i]
-                keyword_counts = json.loads(keyword_counts_list[i])
-                ex_tokens = num_tokens_list[i]
-                if not filters_trig:
-                    keep_indices.append(i)
-                else:
-                    filtered_out_indices[split].append({
-                        "idx": i,
-                        "tokens": ex_tokens,
-                        "filters": filters_trig,
-                        "lang": ql_type,
-                    })
-                    for fil in filters_trig:
-                        fs = stats_dict[fil][ql_type]
-                        fs["count"] += 1
-                        fs["tokens"] += ex_tokens
-                        for k in query_keywords:
-                            fs["keyword_counts"][k] += keyword_counts.get(k, 0)
-                        if len(fs["examples"]) < example_cap:
-                            fs["examples"].append({
-                                "text": text_list[i],
-                                "matched": matched_substring
-                            })
-            result_dict[split] = ds.select(keep_indices)
-            filtered_indices_per_split[split] = keep_indices
-        return DatasetDict(result_dict), stats_dict, filtered_out_indices, filtered_indices_per_split
-    else:
-        raise NotImplementedError()
-        # For single Dataset (optionally add tqdm here too)
-        data = annotated_ds
-        keep_indices = []
-        filter_stats = defaultdict(lambda: defaultdict(lambda: {
-            "count": 0, "tokens": 0, "examples": []
-        }))
-        filtered_out_indices = []
-        for i, ex in enumerate(tqdm(data, desc="Filtering (no split)", total=len(data))):
-            filters_trig, ql_type, matched_substring, keyword_counts = filter_and_annotate(ex)
-            ex_tokens = len(tokenizer.encode(ex["text"]))
-            if not filters_trig:
-                keep_indices.append(i)
-            else:
-                lang = ql_type or "unknown"
-                filtered_out_indices.append({
-                    "idx": i,
-                    "tokens": ex_tokens,
-                    "filters": filters_trig,
-                    "lang": lang,
-                })
-                for fil in filters_trig:
-                    fs = filter_stats[fil][lang]
-                    fs["count"] += 1
-                    fs["tokens"] += ex_tokens
-                    if "keyword_counts" not in fs:
-                        fs["keyword_counts"] = {k: 0 for k in query_keywords}
-                    for k in query_keywords:
-                        fs["keyword_counts"][k] += keyword_counts.get(k, 0)
-                    if len(fs["examples"]) < example_cap:
-                        fs["examples"].append({
-                            "text": ex["text"],
-                            "matched": matched_substring
-                        })
-        return data.select(keep_indices), filter_stats, filtered_out_indices, keep_indices
-
-
-def annotate_dataset_parallel(dataset, tokenizer, num_proc=NUM_PROC):
-    return dataset.map(
-        lambda batch: filter_and_annotate(batch, tokenizer=tokenizer),
-        batched=True,
-        batch_size=1000,
-        num_proc=num_proc,
-        load_from_cache_file=LOAD_FROM_CACHE_FILE,
-        keep_in_memory=KEEP_IN_MEMORY,
-        desc="Annotate & count tokens"
-    )
-
-
-def annotate_datasetdict_parallel(dataset_dict, tokenizer, num_proc=NUM_PROC):
-    return DatasetDict({
-        k: annotate_dataset_parallel(v, tokenizer, num_proc=num_proc)
-        for k, v in dataset_dict.items()
-    })
-
 def keep_only_text(example):
     return {"text": example["text"]}
-
-
-def summarize_and_save_stats(raw_path, clean_path, tokenizer, output_file, split_name="train", batch_size=64, num_proc=1):
-    # Load datasets
-    print(f"Loading datasets for statistics: {raw_path}, {clean_path}")
-    raw_dataset = load_from_disk(raw_path)
-    clean_dataset = load_from_disk(clean_path)
-
-    raw_samples, raw_tokens = compute_dataset_stats(raw_dataset, tokenizer, batch_size, num_proc)
-    clean_samples, clean_tokens = compute_dataset_stats(clean_dataset, tokenizer, batch_size, num_proc)
-
-    stats = {
-        "split": split_name,
-        "raw_num_samples": raw_samples,
-        "raw_num_tokens": raw_tokens,
-        "clean_num_samples": clean_samples,
-        "clean_num_tokens": clean_tokens,
-        "fraction_kept_samples": round(clean_samples / raw_samples, 4) if raw_samples else None,
-        "fraction_kept_tokens": round(clean_tokens / raw_tokens, 4) if raw_tokens else None,
-    }
-    print(f"==> Stats for {split_name}: {stats}")
-    with open(output_file, "w") as f:
-        json.dump(stats, f, indent=2)
-    return stats
-
 
 def tokenize_dataset(dataset, tokenizer, num_proc=NUM_PROC, with_indices=WITH_INDICES):
     def tokenize_function(examples):
         return tokenizer(examples["text"], truncation=False)
-    # Dynamically pick the first split name
-    if isinstance(dataset, dict):  # DatasetDict
+    if isinstance(dataset, dict):
         split_name = next(iter(dataset.keys()))
         columns = dataset[split_name].column_names
-    else:  # Single Dataset
+    else:
         columns = dataset.column_names
     return dataset.map(tokenize_function, batched=True, num_proc=num_proc, remove_columns=columns, with_indices=with_indices,
         load_from_cache_file=LOAD_FROM_CACHE_FILE,
@@ -344,7 +159,6 @@ def group_texts(tokenized_dataset, block_size=512, num_proc=NUM_PROC, with_indic
     def group_texts_fn(examples):
         concatenated = {k: list(chain(*examples[k])) for k in examples.keys()}
         total_length = len(concatenated[list(examples.keys())[0]])
-        # Drop the remainder to have a fixed length (you may also pad if desired)
         if total_length >= block_size:
             total_length = (total_length // block_size) * block_size
         result = {
@@ -352,7 +166,6 @@ def group_texts(tokenized_dataset, block_size=512, num_proc=NUM_PROC, with_indic
             for k, t in concatenated.items()
         }
         return result
-
     return tokenized_dataset.map(group_texts_fn, batched=True, num_proc=num_proc, with_indices=with_indices,
         load_from_cache_file=LOAD_FROM_CACHE_FILE,
         keep_in_memory=KEEP_IN_MEMORY)
@@ -360,146 +173,9 @@ def group_texts(tokenized_dataset, block_size=512, num_proc=NUM_PROC, with_indic
 def save_dataset(dataset, path):
     dataset.save_to_disk(path)
 
-def count_tokens(dataset: DatasetDict | Dataset, tokenizer, num_proc=NUM_PROC, batch_size=1000, show_progress=True):
-    """
-    Count tokens in a HuggingFace Dataset or DatasetDict in parallel.
-    Returns: (total_tokens, total_examples)
-    """
-    # Handle DatasetDict or plain Dataset
-    if isinstance(dataset, dict):  # DatasetDict
-        total_tokens, total_examples = 0, 0
-        for split in dataset:
-            tokens, examples = count_tokens(dataset[split], tokenizer, num_proc=num_proc, batch_size=batch_size, show_progress=show_progress)
-            total_tokens += tokens
-            total_examples += examples
-        return total_tokens, total_examples
-
-    # Fast path for HuggingFace Dataset
-    def batch_token_len(batch):
-        # tokenizer(batch["text"], ...) returns a dict with "input_ids"
-        tok = tokenizer(batch["text"], add_special_tokens=False, truncation=False)
-        # If tokenizer returns a list of lists
-        if isinstance(tok["input_ids"][0], list):
-            lengths = [len(ids) for ids in tok["input_ids"]]
-        else:  # If single string
-            lengths = [len(tok["input_ids"])]
-        return {"num_tokens": lengths}
-
-    # .map is parallel and batched
-    mapped = dataset.map(
-        batch_token_len,
-        batched=True,
-        batch_size=batch_size,
-        num_proc=num_proc,
-        remove_columns=[],
-        load_from_cache_file=LOAD_FROM_CACHE_FILE,
-        keep_in_memory=KEEP_IN_MEMORY,
-        desc=f"Counting tokens."
-    )
-    total_tokens = sum(mapped["num_tokens"])
-    total_examples = len(mapped)
-    return total_tokens, total_examples
-
-
-
-def build_dirty_matched_set(dataset, filtered_out_indices, clean_token_target, filtered_indices_per_split, seed=42, tokenizer=None):
-    random.seed(seed)
-    dirty_dict = DatasetDict()
-    supplement_stats_per_split = {}
-    for split in filtered_out_indices:
-        data = dataset[split]
-        dirty_info = filtered_out_indices[split]
-        random.shuffle(dirty_info)
-        selected_dirty = []
-        total_tokens = 0
-        for entry in dirty_info:
-            if total_tokens >= clean_token_target[split]:
-                break
-            selected_dirty.append(entry["idx"])
-            total_tokens += entry["tokens"]
-        # Supplement with random clean if needed
-        n_tokens_dirty = total_tokens
-        n_docs_dirty = len(selected_dirty)
-        supplement_indices = []
-        supplement_tokens = 0
-        supplement_docs = 0
-        if total_tokens < clean_token_target[split]:
-            needed = clean_token_target[split] - total_tokens
-            all_clean_indices = set(filtered_indices_per_split[split])
-            dirty_indices_set = set(e["idx"] for e in dirty_info)
-            eligible_clean_indices = list(all_clean_indices - dirty_indices_set)
-            random.shuffle(eligible_clean_indices)
-            for i in eligible_clean_indices:
-                # Count tokens not characters for supplementing
-                ex_len = len(tokenizer.encode(data[i]["text"])) if tokenizer else len(data[i]["text"])
-                supplement_indices.append(i)
-                supplement_tokens += ex_len
-                supplement_docs += 1
-                if total_tokens + supplement_tokens >= clean_token_target[split]:
-                    break
-            all_indices = selected_dirty + supplement_indices
-        else:
-            supplement_tokens = 0
-            supplement_docs = 0
-            all_indices = selected_dirty
-        supplement_stats_per_split[split] = {
-            "n_docs_dirty": n_docs_dirty, 
-            "n_tokens_dirty": n_tokens_dirty,
-            "n_docs_supplement": supplement_docs, 
-            "n_tokens_supplement": supplement_tokens,
-            "n_total": len(all_indices)
-        }
-        dirty_dict[split] = data.select(all_indices)
-    return dirty_dict, supplement_stats_per_split
-
-
-def collect_stats_for_set(dataset_dict, dataset_type, ref_tokens_per_split, ref_docs_per_split, tokenizer, supplement_stats=None, save=True, dataset_cache_path=None, max_seq_length=512, num_proc=NUM_PROC):
-    if dataset_cache_path is None:
-        raise NotImplementedError("You must provide dataset_cache_path.")
-    rows = []
-    grouped = {}
-    for split in dataset_dict.keys():
-        n_docs = len(dataset_dict[split])
-        n_tokens, _ = count_tokens(dataset_dict[split], tokenizer)
-        # Get number of group blocks
-        tknz = tokenize_dataset(DatasetDict({split: dataset_dict[split]}), tokenizer, num_proc=num_proc)
-        grouped[split] = group_texts(tknz, block_size=max_seq_length, num_proc=num_proc)[split]
-        n_blocks = len(grouped[split])
-        if save and dataset_cache_path:
-            os.makedirs(os.path.join(dataset_cache_path, dataset_type, "grouped"), exist_ok=True)
-        row = {
-            "dataset_type": dataset_type,
-            "split": split, 
-            "num_documents": n_docs,
-            "num_tokens": n_tokens,
-            "num_blocks": n_blocks,
-            "percent_tokens_relative_full": n_tokens / ref_tokens_per_split[split] if ref_tokens_per_split[split] else "",
-            "percent_docs_relative_full": n_docs / ref_docs_per_split[split] if ref_docs_per_split[split] else "",
-            "dirty_supplement_from_clean_docs": supplement_stats[split]['n_docs_supplement'] if supplement_stats and split in supplement_stats else "",
-            "dirty_supplement_from_clean_tokens": supplement_stats[split]['n_tokens_supplement'] if supplement_stats and split in supplement_stats else ""
-        }
-        rows.append(row)
-
-    print(f"Grouped splits to save for {dataset_type}:", grouped.keys())
-    save_dir = dataset_cache_path
-    save_dir = os.path.join(dataset_cache_path, dataset_type, "grouped")
-    print(save_dir)
-    if save and dataset_cache_path:
-        os.makedirs(save_dir, exist_ok=True)
-        print(f"Saving grouped dataset for '{dataset_type}' with splits: {list(grouped.keys())} at {save_dir}")
-        if grouped:
-            save_dataset(DatasetDict(grouped), save_dir)
-        else:
-            print(f"Warning: Nothing to save for {dataset_type} at {save_dir} (grouped is empty!)")
-    
-    return rows
-
-
 def compute_dataset_stats(dataset, tokenizer=None, batch_size=64, num_proc=1):
-    # Determine which column to use for counting tokens
     if "input_ids" in dataset.column_names:
         def batch_token_len(batch):
-            # batch["input_ids"] is a list of lists
             return {"num_tokens": [len(ids) for ids in batch["input_ids"]]}
     elif "text" in dataset.column_names:
         def batch_token_len(batch):
@@ -511,7 +187,6 @@ def compute_dataset_stats(dataset, tokenizer=None, batch_size=64, num_proc=1):
             return {"num_tokens": lengths}
     else:
         raise ValueError("Dataset must have either 'text' or 'input_ids' column.")
-
     mapped = dataset.map(
         batch_token_len,
         batched=True,
@@ -526,35 +201,22 @@ def compute_dataset_stats(dataset, tokenizer=None, batch_size=64, num_proc=1):
     total_samples = len(mapped)
     return total_samples, total_tokens
 
-def compute_chunked_stats(chunks_dir, tokenizer, batch_size=64, num_proc=1):
-    clean_dirs = [
-        os.path.join(chunks_dir, d, "clean")
-        for d in os.listdir(chunks_dir)
-        if d.startswith("chunk_") and os.path.exists(os.path.join(chunks_dir, d, "clean"))
-    ]
-    total_samples, total_tokens = 0, 0
-    for cdir in clean_dirs:
-        ds = load_from_disk(cdir)
-        s, t = compute_dataset_stats(ds, tokenizer, batch_size, num_proc)
-        total_samples += s
-        total_tokens += t
-        print(f"Chunk {os.path.basename(os.path.dirname(cdir))}: {s} samples, {t} tokens")
-    print(f"Total processed: {total_samples} samples, {total_tokens} tokens")
-    return total_samples, total_tokens
-
-
-
-def merge_and_balance_clean_dirty(chunks_dir, tokenizer, batch_size=64, num_proc=1, output_dir=None, seed=42):
+def merge_and_balance_clean_dirty(
+    chunks_dir, tokenizer, batch_size=64, num_proc=1, output_dir=None, seed=42, stats_json_path=None, block_size=512
+):
     """
-    Merges all clean/dirty chunks into two datasets, then trims/supplements so both have matching token count.
-    Saves merged datasets and prints stats.
+    Merges all clean/dirty chunks into two datasets, trims/supplements so both have matching token count.
+    Groups the datasets into `block_size` tokens, saves merged/grouped datasets, prints & saves final stats, and deletes all chunk dirs.
     """
+    from datasets import concatenate_datasets
     # 1. Collect all clean and dirty datasets from all chunks
     clean_datasets = []
     dirty_datasets = []
+    chunk_paths = []
     for d in sorted(os.listdir(chunks_dir)):
         chunk_path = os.path.join(chunks_dir, d)
         if d.startswith("chunk_"):
+            chunk_paths.append(chunk_path)
             clean_path = os.path.join(chunk_path, "clean")
             dirty_path = os.path.join(chunk_path, "dirty")
             if os.path.exists(clean_path):
@@ -562,71 +224,119 @@ def merge_and_balance_clean_dirty(chunks_dir, tokenizer, batch_size=64, num_proc
             if os.path.exists(dirty_path):
                 dirty_datasets.append(load_from_disk(dirty_path))
 
-    # 2. Merge them
     merged_clean = concatenate_datasets(clean_datasets) if clean_datasets else Dataset.from_dict({})
     merged_dirty = concatenate_datasets(dirty_datasets) if dirty_datasets else Dataset.from_dict({})
     print(f"Merged clean: {len(merged_clean)} examples")
     print(f"Merged dirty: {len(merged_dirty)} examples")
 
-    # 3. Count tokens
-    _, clean_tokens = compute_dataset_stats(merged_clean, tokenizer, batch_size, num_proc)
-    _, dirty_tokens = compute_dataset_stats(merged_dirty, tokenizer, batch_size, num_proc)
-    print(f"Total tokens: clean={clean_tokens}, dirty={dirty_tokens}")
+    # 2. Tokenize and group
+    print("Tokenizing and grouping clean/dirty datasets ...")
+    tokenized_clean = tokenize_dataset(merged_clean, tokenizer, num_proc=num_proc)
+    grouped_clean = group_texts(tokenized_clean, block_size=block_size, num_proc=num_proc)
+    tokenized_dirty = tokenize_dataset(merged_dirty, tokenizer, num_proc=num_proc)
+    grouped_dirty = group_texts(tokenized_dirty, block_size=block_size, num_proc=num_proc)
 
-    # 4. Balance sizes
+    # 3. Count grouped blocks/tokens
+    n_clean_blocks, clean_tokens = compute_dataset_stats(grouped_clean, tokenizer, batch_size, num_proc)
+    n_dirty_blocks, dirty_tokens = compute_dataset_stats(grouped_dirty, tokenizer, batch_size, num_proc)
+    print(f"Total grouped blocks: clean={n_clean_blocks}, dirty={n_dirty_blocks}")
+    print(f"Total grouped tokens: clean={clean_tokens}, dirty={dirty_tokens}")
+
+    # 4. Balance group block count (token count is ~identical per block)
     rng = np.random.default_rng(seed)
-    if dirty_tokens < clean_tokens:
-        print(f"Dirty has fewer tokens. Sampling extra from clean...")
-        # Find set of all indices (not already used in dirty)
-        clean_indices = np.arange(len(merged_clean))
-        # Try to avoid supplementing with already dirty examples, but in this process, there's no overlap, so just sample.
-        # Sample until reaching clean_tokens
+    # Helper to get total tokens in a grouped dataset
+    def total_tokens(ds):
+        return sum(len(ids) for ids in ds["input_ids"])
+    clean_token_blocks = [len(ids) for ids in grouped_clean["input_ids"]]
+    dirty_token_blocks = [len(ids) for ids in grouped_dirty["input_ids"]]
+    clean_total_tokens = sum(clean_token_blocks)
+    dirty_total_tokens = sum(dirty_token_blocks)
+
+    if dirty_total_tokens < clean_total_tokens:
+        print("Dirty has fewer tokens. Supplementing with additional clean blocks ...")
+        # Sample from extra clean blocks until tokens match
+        indices = np.arange(len(grouped_clean))
+        rng.shuffle(indices)
         supplement_indices = []
-        tokens_accum = dirty_tokens
-        perm = rng.permutation(len(merged_clean))
+        tokens_accum = dirty_total_tokens
         i = 0
-        while tokens_accum < clean_tokens and i < len(perm):
-            idx = perm[i]
-            # Add supplement example
-            ex = merged_clean[idx]
-            tokens = len(tokenizer(ex["text"], add_special_tokens=False, truncation=False)["input_ids"])
+        while tokens_accum < clean_total_tokens and i < len(indices):
+            idx = int(indices[i])
+            tokens = clean_token_blocks[idx]
             supplement_indices.append(idx)
             tokens_accum += tokens
             i += 1
-        supplement_ds = merged_clean.select(supplement_indices)
-        final_dirty = concatenate_datasets([merged_dirty, supplement_ds])
-        final_clean = merged_clean
-    elif clean_tokens < dirty_tokens:
-        print(f"Clean has fewer tokens. Subsampling dirty to match clean token count...")
-        # Subsample dirty to match clean token budget
-        perm = rng.permutation(len(merged_dirty))
-        tokens_accum = 0
+        supplement_ds = grouped_clean.select(supplement_indices)
+        final_dirty = concatenate_datasets([grouped_dirty, supplement_ds])
+        final_clean = grouped_clean
+    elif clean_total_tokens < dirty_total_tokens:
+        print("Clean has fewer tokens. Subsampling dirty blocks ...")
+        indices = np.arange(len(grouped_dirty))
+        rng.shuffle(indices)
         keep_indices = []
+        tokens_accum = 0
         i = 0
-        while tokens_accum < clean_tokens and i < len(perm):
-            idx = perm[i]
-            ex = merged_dirty[idx]
-            tokens = len(tokenizer(ex["text"], add_special_tokens=False, truncation=False)["input_ids"])
+        while tokens_accum < clean_total_tokens and i < len(indices):
+            idx = int(indices[i])
+            tokens = dirty_token_blocks[idx]
             keep_indices.append(idx)
             tokens_accum += tokens
             i += 1
-        final_dirty = merged_dirty.select(keep_indices)
-        final_clean = merged_clean
+        final_dirty = grouped_dirty.select(keep_indices)
+        final_clean = grouped_clean
     else:
         print("Already matched tokens.")
-        final_clean = merged_clean
-        final_dirty = merged_dirty
+        final_clean = grouped_clean
+        final_dirty = grouped_dirty
 
-    # 5. Count again and print
-    _, final_clean_tokens = compute_dataset_stats(final_clean, tokenizer, batch_size, num_proc)
-    _, final_dirty_tokens = compute_dataset_stats(final_dirty, tokenizer, batch_size, num_proc)
-    print(f"Final matched token count: clean={final_clean_tokens}, dirty={final_dirty_tokens}")
-    # Save
+    # 5. Final stats (after grouping & balancing)
+    n_final_clean_blocks, final_clean_tokens = compute_dataset_stats(final_clean, tokenizer, batch_size, num_proc)
+    n_final_dirty_blocks, final_dirty_tokens = compute_dataset_stats(final_dirty, tokenizer, batch_size, num_proc)
+    print(f"Final grouped blocks: clean={n_final_clean_blocks}, dirty={n_final_dirty_blocks}")
+    print(f"Final matched tokens: clean={final_clean_tokens}, dirty={final_dirty_tokens}")
+
+    stats = {
+        "orig_clean": {
+            "num_blocks": n_clean_blocks,
+            "num_tokens": clean_total_tokens,
+        },
+        "orig_dirty": {
+            "num_blocks": n_dirty_blocks,
+            "num_tokens": dirty_total_tokens,
+        },
+        "final_clean": {
+            "num_blocks": n_final_clean_blocks,
+            "num_tokens": final_clean_tokens,
+        },
+        "final_dirtymatched": {
+            "num_blocks": n_final_dirty_blocks,
+            "num_tokens": final_dirty_tokens,
+        },
+        "match_ratio": round(final_dirty_tokens / final_clean_tokens, 6) if final_clean_tokens else None
+    }
+
+    # 6. Save grouped datasets
     if output_dir is not None:
-        clean_out = os.path.join(output_dir, "final_clean")
-        dirty_out = os.path.join(output_dir, "final_dirtymatched")
+        clean_out = os.path.join(output_dir, "final_clean_grouped")
+        dirty_out = os.path.join(output_dir, "final_dirtymatched_grouped")
         final_clean.save_to_disk(clean_out)
         final_dirty.save_to_disk(dirty_out)
-        print(f"Saved final_clean: {clean_out} ({len(final_clean)} samples)")
-        print(f"Saved final_dirtymatched: {dirty_out} ({len(final_dirty)} samples)")
-    return final_clean, final_dirty, final_clean_tokens, final_dirty_tokens
+        print(f"Saved grouped clean: {clean_out} ({len(final_clean)} blocks)")
+        print(f"Saved grouped dirtymatched: {dirty_out} ({len(final_dirty)} blocks)")
+
+    # 7. Save stats as JSON
+    stats_path = stats_json_path or os.path.join(output_dir, "final_stats.json")
+    with open(stats_path, "w") as f:
+        json.dump(stats, f, indent=2)
+    print(f"Final stats saved to {stats_path}")
+
+    # 8. Remove chunk folders
+    print("Deleting all chunk_* folders ...")
+    for path in chunk_paths:
+        try:
+            import shutil
+            shutil.rmtree(path)
+        except Exception as e:
+            print(f"Failed to remove {path}: {e}")
+
+    return final_clean, final_dirty, stats

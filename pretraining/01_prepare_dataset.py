@@ -1,12 +1,11 @@
 import os
 import json
 import argparse
-import shutil
 from transformers import AutoTokenizer
-from datasets import load_dataset, load_from_disk, DatasetDict
+from datasets import load_dataset, load_from_disk
 from data_utils import (
-    compute_chunked_stats, compute_dataset_stats, get_chunk_ranges, chunked_annotate_and_filter,
-    keep_only_text, merge_and_balance_clean_dirty, tokenize_dataset, group_texts
+    get_chunk_ranges, chunked_annotate_and_filter,
+    merge_and_balance_clean_dirty, tokenize_dataset, group_texts, compute_dataset_stats
 )
 
 def main():
@@ -47,24 +46,14 @@ def main():
         raw_train = split["train"]
         raw_dev = split["test"]
 
-        # Save train split to disk for chunked processing
         raw_train.save_to_disk(raw_train_path)
         print(f"Saved raw_train at {raw_train_path}, {len(raw_train)} samples")
 
-        # Tokenize and group dev (unfiltered!) and save to disk
         os.makedirs(shared_dev_dir, exist_ok=True)
         tokenized_dev = tokenize_dataset(raw_dev, tokenizer, num_proc=args.num_proc)
         grouped_dev = group_texts(tokenized_dev, block_size=max_seq_length, num_proc=args.num_proc)
         grouped_dev.save_to_disk(os.path.join(shared_dev_dir, "grouped"))
         print(f"Saved grouped dev set at {shared_dev_dir}/grouped, {len(grouped_dev)} blocks")
-
-        # (Optional but recommended) Delete HF dataset cache to free disk space
-        # try:
-        #     if os.path.isdir(cache_dir):
-        #         print(f"Deleting original HuggingFace cache dir: {cache_dir}")
-        #         shutil.rmtree(cache_dir)
-        # except Exception as e:
-        #     print(f"Failed to delete HF cache dir: {e}")
 
         del full_dataset, split, raw_train, raw_dev, tokenized_dev, grouped_dev
         import gc; gc.collect()
@@ -99,29 +88,19 @@ def main():
         num_proc=args.num_proc,
     )
 
+    # === 5. Merge and balance, compute and save stats, delete chunk dirs ===
     merge_and_balance_clean_dirty(
         chunks_dir=dataset_cache_path,
         tokenizer=tokenizer,
         batch_size=args.batch_size,
         num_proc=args.num_proc,
         output_dir=dataset_cache_path,
-        seed=42
+        seed=42,
+        stats_json_path=os.path.join(dataset_cache_path, "final_stats.json"),
+        block_size=max_seq_length
     )
 
-    # === 5. Compute and save stats for processed train data ===
-    chunked_stats_file = os.path.join(dataset_cache_path, "train_stats.json")
-    train_samples, train_tokens = compute_chunked_stats(
-        dataset_cache_path, tokenizer,
-        batch_size=args.batch_size, num_proc=args.num_proc
-    )
-    with open(chunked_stats_file, "w") as f:
-        json.dump({
-            "split": "train",
-            "clean_num_samples": train_samples,
-            "clean_num_tokens": train_tokens
-        }, f, indent=2)
-
-    print("\nAll processing finished. Training set chunked, grouped dev set saved.")
+    print("\nAll processing finished. Training set chunked, cleaned/dirty sets balanced, dev set saved.")
 
 if __name__ == "__main__":
     main()

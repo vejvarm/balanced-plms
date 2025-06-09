@@ -41,14 +41,13 @@ max_seq_length = config_args.get("max_seq_length", 512)
 # 1. Load preprocessed dataset from disk
 data_dir = pathlib.Path(config_args.get("dataset_cache_path", "/work/datasets/owt-10k-clean"))
 variant = config_args["dataset_variant"]
-train_path = data_dir.joinpath(variant, "grouped")
-dev_path = data_dir.joinpath("full", "grouped")
+train_path = data_dir.joinpath(variant)
+dev_path = data_dir.joinpath("shared_dev_grouped", "grouped")
 print(f"Loading dataset from train_path: `{train_path}` | dev_path: `{dev_path}`")
 train_dataset = load_from_disk(str(train_path))
-print(train_dataset)
-train_dataset = train_dataset["train"]
-eval_dataset = load_from_disk(str(dev_path))["test"]
-print(eval_dataset)
+print(f"Train dataset: {train_dataset}")
+eval_dataset = load_from_disk(str(dev_path))
+print(f"Eval (dev) dataset: {eval_dataset}")
 
 # 2. Tokenizer initialization.
 tokenizer = AutoTokenizer.from_pretrained(config_args["model_name_or_path"])
