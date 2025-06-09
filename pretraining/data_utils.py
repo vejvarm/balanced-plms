@@ -2,7 +2,8 @@ import json
 import os
 import random
 import re
-from datasets import load_dataset, DatasetDict, Dataset
+import numpy as np
+from datasets import load_dataset, DatasetDict, Dataset, load_from_disk, concatenate_datasets
 from itertools import chain
 from collections import defaultdict, Counter
 from tqdm import tqdm
@@ -24,9 +25,92 @@ QL_PATTERNS = [
     # (r"(db\.\w+\.[^;]+)", "MQL"),   # MQL (https://github.com/jf87/SM3-Text-to-Query/blob/main/src/evaluation/DB_query.py)
 ]
 
+
+def load_config(ds: str) -> dict:
+    cfg_mapping = {
+        "openwebtext": "./configs/00_config_openwebtext.json",
+        "openwebtext-10k": "./configs/00_config_openwebtext-10k.json",
+        "realnewslike": "./configs/00_config_c4-realnewslike.json"
+    }
+    with open(cfg_mapping[ds]) as f:
+        return json.load(f)
+
+def get_dataset_len(dataset_path, split='train'):
+    # Load just enough to get the length (uses cache if possible)
+    dataset = load_dataset(dataset_path, split=split)
+    return len(dataset)
+
+def get_chunk_ranges(total, chunk_size):
+    return [(start, min(start + chunk_size, total)) for start in range(0, total, chunk_size)]
+
 def load_and_split_data(dataset: str, subdataset: str | None, cache_dir, split_fraction: str, test_size: str) -> Dataset | DatasetDict:
     dataset: Dataset | DatasetDict = load_dataset(dataset, subdataset, split=split_fraction, cache_dir=cache_dir, trust_remote_code=True, streaming=True)
     return dataset.train_test_split(test_size=test_size, writer_batch_size=100000)
+
+
+def chunked_annotate_and_filter(
+    dataset_path, chunk_ranges, output_dir, tokenizer, batch_size=64, num_proc=1
+):
+    """
+    For each chunk, annotate, filter, and save the clean chunk to disk.
+    """
+    import gc
+    from datasets import load_from_disk
+
+    os.makedirs(output_dir, exist_ok=True)
+    ds = load_from_disk(dataset_path)
+    for chunk_id, (start, end) in enumerate(chunk_ranges):
+        chunk_dir = os.path.join(output_dir, f"chunk_{chunk_id:05d}")
+        done_path = os.path.join(chunk_dir, "DONE")
+        if os.path.exists(done_path):
+            print(f"Chunk {chunk_id} already processed, skipping.")
+            continue
+        print(f"\n==> Processing chunk {chunk_id} [{start}:{end}] ...")
+        chunk_ds = ds.select(range(start, end))
+        # Annotate (tokenization is included)
+        annotated = chunk_ds.map(
+            lambda batch: filter_and_annotate(batch, tokenizer=tokenizer),
+            batched=True,
+            batch_size=batch_size,
+            num_proc=num_proc,
+            load_from_cache_file=False,
+            keep_in_memory=False,
+            desc="Annotate & count tokens"
+        )
+        # Filter out lines with query language patterns
+        filters = annotated["filters_triggered"]
+        to_keep = []
+        dirty_indices = []
+        for i, f in enumerate(filters):
+            if not f:
+                to_keep.append(i)
+            else:
+                dirty_indices.append(i)
+        # to_keep = [i for i, f in enumerate(filters) if not f]
+        # dirty_indices = [i for i, f in enumerate(filters) if f]
+        clean = annotated.select(to_keep).map(
+            keep_only_text,
+            remove_columns=[c for c in annotated.column_names if c != "text"],
+            load_from_cache_file=False,
+            keep_in_memory=False,
+        )
+        dirty = annotated.select(dirty_indices).map(
+            keep_only_text,
+            remove_columns=[c for c in annotated.column_names if c != "text"],
+            load_from_cache_file=False,
+            keep_in_memory=False,
+        )
+        # Save these chunks
+        os.makedirs(chunk_dir, exist_ok=True)
+        clean.save_to_disk(os.path.join(chunk_dir, "clean"))
+        print(f"✅ Saved clean chunk {chunk_id}: {len(clean)} examples")
+        dirty.save_to_disk(os.path.join(chunk_dir, "dirty"))
+        print(f"✅ Saved dirty chunk {chunk_id}: {len(dirty)} examples")
+        with open(done_path, "w") as f:
+            f.write("done")
+        # Memory management
+        del chunk_ds, annotated, clean, dirty
+        gc.collect()
 
 
 # Keyword filter (count tokens matched)
@@ -34,6 +118,41 @@ query_keywords = [
     "SELECT", "MATCH", "WHERE", "JOIN", "OPTIONAL", "FILTER",
     "RETURN", "INSERT", "DELETE", "SQL", "SPARQL", "CYPHER"
 ]
+
+import os
+import gc
+
+def process_chunk(dataset_path, split, start, end, chunk_id, output_base, tokenizer, args):
+    chunk_out_dir = os.path.join(output_base, f"chunk_{chunk_id:05d}")
+    if os.path.exists(chunk_out_dir):
+        print(f"Chunk {chunk_id} already processed, skipping.")
+        return
+
+    print(f"Processing chunk {chunk_id}: [{start}:{end}]")
+    ds = load_dataset(dataset_path, split=f"{split}[{start}:{end}]")
+    # 1. Annotate (filter_and_annotate)
+    annotated = ds.map(
+        lambda batch: filter_and_annotate(batch, tokenizer=tokenizer),
+        batched=True,
+        batch_size=args.batch_size,
+        num_proc=args.num_proc,
+        load_from_cache_file=False,
+        keep_in_memory=False,
+        desc="Annotate & count tokens"
+    )
+    # 2. Filter/clean (your filter_and_collect_stats)
+    #    For a single chunk, can just filter "in place"
+    filters = annotated['filters_triggered']
+    to_keep = [i for i, f in enumerate(filters) if not f]
+    clean = annotated.select(to_keep).map(keep_only_text, remove_columns=[c for c in annotated.column_names if c != "text"])
+    # 3. Save to disk
+    os.makedirs(chunk_out_dir, exist_ok=True)
+    clean.save_to_disk(os.path.join(chunk_out_dir, "clean"))
+    # Save stats (optional)
+    # Save annotation or filter results if needed
+    del ds, annotated, clean
+    gc.collect()
+
 
 def filter_and_annotate(examples, tokenizer=None):
     texts = examples["text"]
@@ -160,7 +279,7 @@ def filter_and_collect_stats(annotated_ds, example_cap=10):
                             "matched": matched_substring
                         })
         return data.select(keep_indices), filter_stats, filtered_out_indices, keep_indices
-    
+
 
 def annotate_dataset_parallel(dataset, tokenizer, num_proc=NUM_PROC):
     return dataset.map(
@@ -182,6 +301,31 @@ def annotate_datasetdict_parallel(dataset_dict, tokenizer, num_proc=NUM_PROC):
 
 def keep_only_text(example):
     return {"text": example["text"]}
+
+
+def summarize_and_save_stats(raw_path, clean_path, tokenizer, output_file, split_name="train", batch_size=64, num_proc=1):
+    # Load datasets
+    print(f"Loading datasets for statistics: {raw_path}, {clean_path}")
+    raw_dataset = load_from_disk(raw_path)
+    clean_dataset = load_from_disk(clean_path)
+
+    raw_samples, raw_tokens = compute_dataset_stats(raw_dataset, tokenizer, batch_size, num_proc)
+    clean_samples, clean_tokens = compute_dataset_stats(clean_dataset, tokenizer, batch_size, num_proc)
+
+    stats = {
+        "split": split_name,
+        "raw_num_samples": raw_samples,
+        "raw_num_tokens": raw_tokens,
+        "clean_num_samples": clean_samples,
+        "clean_num_tokens": clean_tokens,
+        "fraction_kept_samples": round(clean_samples / raw_samples, 4) if raw_samples else None,
+        "fraction_kept_tokens": round(clean_tokens / raw_tokens, 4) if raw_tokens else None,
+    }
+    print(f"==> Stats for {split_name}: {stats}")
+    with open(output_file, "w") as f:
+        json.dump(stats, f, indent=2)
+    return stats
+
 
 def tokenize_dataset(dataset, tokenizer, num_proc=NUM_PROC, with_indices=WITH_INDICES):
     def tokenize_function(examples):
@@ -349,3 +493,140 @@ def collect_stats_for_set(dataset_dict, dataset_type, ref_tokens_per_split, ref_
             print(f"Warning: Nothing to save for {dataset_type} at {save_dir} (grouped is empty!)")
     
     return rows
+
+
+def compute_dataset_stats(dataset, tokenizer=None, batch_size=64, num_proc=1):
+    # Determine which column to use for counting tokens
+    if "input_ids" in dataset.column_names:
+        def batch_token_len(batch):
+            # batch["input_ids"] is a list of lists
+            return {"num_tokens": [len(ids) for ids in batch["input_ids"]]}
+    elif "text" in dataset.column_names:
+        def batch_token_len(batch):
+            tok = tokenizer(batch["text"], add_special_tokens=False, truncation=False)
+            if isinstance(tok["input_ids"][0], list):
+                lengths = [len(ids) for ids in tok["input_ids"]]
+            else:
+                lengths = [len(tok["input_ids"])]
+            return {"num_tokens": lengths}
+    else:
+        raise ValueError("Dataset must have either 'text' or 'input_ids' column.")
+
+    mapped = dataset.map(
+        batch_token_len,
+        batched=True,
+        batch_size=batch_size,
+        num_proc=num_proc,
+        remove_columns=[],
+        load_from_cache_file=False,
+        keep_in_memory=False,
+        desc=f"Counting tokens"
+    )
+    total_tokens = sum(mapped["num_tokens"])
+    total_samples = len(mapped)
+    return total_samples, total_tokens
+
+def compute_chunked_stats(chunks_dir, tokenizer, batch_size=64, num_proc=1):
+    clean_dirs = [
+        os.path.join(chunks_dir, d, "clean")
+        for d in os.listdir(chunks_dir)
+        if d.startswith("chunk_") and os.path.exists(os.path.join(chunks_dir, d, "clean"))
+    ]
+    total_samples, total_tokens = 0, 0
+    for cdir in clean_dirs:
+        ds = load_from_disk(cdir)
+        s, t = compute_dataset_stats(ds, tokenizer, batch_size, num_proc)
+        total_samples += s
+        total_tokens += t
+        print(f"Chunk {os.path.basename(os.path.dirname(cdir))}: {s} samples, {t} tokens")
+    print(f"Total processed: {total_samples} samples, {total_tokens} tokens")
+    return total_samples, total_tokens
+
+
+
+def merge_and_balance_clean_dirty(chunks_dir, tokenizer, batch_size=64, num_proc=1, output_dir=None, seed=42):
+    """
+    Merges all clean/dirty chunks into two datasets, then trims/supplements so both have matching token count.
+    Saves merged datasets and prints stats.
+    """
+    # 1. Collect all clean and dirty datasets from all chunks
+    clean_datasets = []
+    dirty_datasets = []
+    for d in sorted(os.listdir(chunks_dir)):
+        chunk_path = os.path.join(chunks_dir, d)
+        if d.startswith("chunk_"):
+            clean_path = os.path.join(chunk_path, "clean")
+            dirty_path = os.path.join(chunk_path, "dirty")
+            if os.path.exists(clean_path):
+                clean_datasets.append(load_from_disk(clean_path))
+            if os.path.exists(dirty_path):
+                dirty_datasets.append(load_from_disk(dirty_path))
+
+    # 2. Merge them
+    merged_clean = concatenate_datasets(clean_datasets) if clean_datasets else Dataset.from_dict({})
+    merged_dirty = concatenate_datasets(dirty_datasets) if dirty_datasets else Dataset.from_dict({})
+    print(f"Merged clean: {len(merged_clean)} examples")
+    print(f"Merged dirty: {len(merged_dirty)} examples")
+
+    # 3. Count tokens
+    _, clean_tokens = compute_dataset_stats(merged_clean, tokenizer, batch_size, num_proc)
+    _, dirty_tokens = compute_dataset_stats(merged_dirty, tokenizer, batch_size, num_proc)
+    print(f"Total tokens: clean={clean_tokens}, dirty={dirty_tokens}")
+
+    # 4. Balance sizes
+    rng = np.random.default_rng(seed)
+    if dirty_tokens < clean_tokens:
+        print(f"Dirty has fewer tokens. Sampling extra from clean...")
+        # Find set of all indices (not already used in dirty)
+        clean_indices = np.arange(len(merged_clean))
+        # Try to avoid supplementing with already dirty examples, but in this process, there's no overlap, so just sample.
+        # Sample until reaching clean_tokens
+        supplement_indices = []
+        tokens_accum = dirty_tokens
+        perm = rng.permutation(len(merged_clean))
+        i = 0
+        while tokens_accum < clean_tokens and i < len(perm):
+            idx = perm[i]
+            # Add supplement example
+            ex = merged_clean[idx]
+            tokens = len(tokenizer(ex["text"], add_special_tokens=False, truncation=False)["input_ids"])
+            supplement_indices.append(idx)
+            tokens_accum += tokens
+            i += 1
+        supplement_ds = merged_clean.select(supplement_indices)
+        final_dirty = concatenate_datasets([merged_dirty, supplement_ds])
+        final_clean = merged_clean
+    elif clean_tokens < dirty_tokens:
+        print(f"Clean has fewer tokens. Subsampling dirty to match clean token count...")
+        # Subsample dirty to match clean token budget
+        perm = rng.permutation(len(merged_dirty))
+        tokens_accum = 0
+        keep_indices = []
+        i = 0
+        while tokens_accum < clean_tokens and i < len(perm):
+            idx = perm[i]
+            ex = merged_dirty[idx]
+            tokens = len(tokenizer(ex["text"], add_special_tokens=False, truncation=False)["input_ids"])
+            keep_indices.append(idx)
+            tokens_accum += tokens
+            i += 1
+        final_dirty = merged_dirty.select(keep_indices)
+        final_clean = merged_clean
+    else:
+        print("Already matched tokens.")
+        final_clean = merged_clean
+        final_dirty = merged_dirty
+
+    # 5. Count again and print
+    _, final_clean_tokens = compute_dataset_stats(final_clean, tokenizer, batch_size, num_proc)
+    _, final_dirty_tokens = compute_dataset_stats(final_dirty, tokenizer, batch_size, num_proc)
+    print(f"Final matched token count: clean={final_clean_tokens}, dirty={final_dirty_tokens}")
+    # Save
+    if output_dir is not None:
+        clean_out = os.path.join(output_dir, "final_clean")
+        dirty_out = os.path.join(output_dir, "final_dirtymatched")
+        final_clean.save_to_disk(clean_out)
+        final_dirty.save_to_disk(dirty_out)
+        print(f"Saved final_clean: {clean_out} ({len(final_clean)} samples)")
+        print(f"Saved final_dirtymatched: {dirty_out} ({len(final_dirty)} samples)")
+    return final_clean, final_dirty, final_clean_tokens, final_dirty_tokens
