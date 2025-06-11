@@ -11,3 +11,6 @@ transformers==4.17.0
 wandb==0.19.6
 xlsxwriter==3.2.1
 seaborn
+accelerate
+openai
+tqdm

@@ -178,3 +178,5 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+scraping/batch_api/.*
+scraping/*.json*
