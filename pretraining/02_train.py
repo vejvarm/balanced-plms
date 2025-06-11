@@ -78,6 +78,7 @@ training_args = TrainingArguments(
     do_train=config_args.get("do_train", True),
     do_eval=config_args.get("do_eval", True),
     num_train_epochs=config_args.get("num_train_epochs", 4),
+    max_steps=config_args.get("max_steps", -1),
     per_device_train_batch_size=config_args.get("per_device_train_batch_size", 12),
     per_device_eval_batch_size=config_args.get("per_device_eval_batch_size", 16),
     gradient_accumulation_steps=config_args.get("gradient_accumulation_steps", 4),
