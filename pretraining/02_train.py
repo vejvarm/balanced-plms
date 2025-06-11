@@ -6,8 +6,8 @@ from transformers import (
     AutoConfig,
     T5ForConditionalGeneration,
     TrainingArguments,
-    Trainer
 )
+from custom_trainer import CustomTrainer
 from datasets import load_from_disk
 from collators import DataCollatorForT5MLM
 
@@ -103,7 +103,7 @@ training_args = TrainingArguments(
 )
 
 # 6. Create the Trainer.
-trainer = Trainer(
+trainer = CustomTrainer(
     model=model,
     args=training_args,
     train_dataset=train_dataset,
