@@ -64,8 +64,11 @@ data_collator = DataCollatorForT5MLM(
 )
 
 # 4. Load model configuration and model.
-config = AutoConfig.from_pretrained(config_args["model_name_or_path"])
-model = T5ForConditionalGeneration(config)
+if pathlib.Path(config_args["model_name_or_path"]).exists():
+    model = T5ForConditionalGeneration.from_pretrained(config_args["model_name_or_path"])
+else:
+    config = AutoConfig.from_pretrained(config_args["model_name_or_path"])
+    model = T5ForConditionalGeneration(config)
 
 out_dir = pathlib.Path(config_args["output_dir"]).joinpath(variant)
 
