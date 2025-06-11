@@ -6,8 +6,8 @@ from transformers import (
     AutoConfig,
     T5ForConditionalGeneration,
     TrainingArguments,
+    Trainer,
 )
-from custom_trainer import CustomTrainer
 from datasets import load_from_disk
 from collators import DataCollatorForT5MLM
 
@@ -97,13 +97,13 @@ training_args = TrainingArguments(
     evaluation_strategy="steps",
     metric_for_best_model="loss",
     greater_is_better=False,
-    fp16=config_args.get("fp16", False),  # Recommended if GPU supports mixed precision
+    fp16=config_args.get("fp16", False),
     logging_dir="../logs",
     report_to=["wandb"],
 )
 
 # 6. Create the Trainer.
-trainer = CustomTrainer(
+trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=train_dataset,
