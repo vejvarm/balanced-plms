@@ -9,8 +9,8 @@ upload = openai.files.create(
 )
 file_id = upload.id
 print("Uploaded file ID:", file_id)
-with open(".current_file_id.txt", "w") as f:
-    f.write(file_id)
+with open(".current_file_id.txt", "a") as f:
+    f.write(file_id+"\n")
 
 # 2. Create the batch
 batch = openai.batches.create(
@@ -19,7 +19,7 @@ batch = openai.batches.create(
     completion_window="24h"
 )
 print("Batch ID:", batch.id)
-with open(".current_batch_id.txt", "w") as f:
-    f.write(batch.id)
+with open(".current_batch_queue.txt", "a") as f:
+    f.write(batch.id+"\n")
 # check progress at https://platform.openai.com/batches
 

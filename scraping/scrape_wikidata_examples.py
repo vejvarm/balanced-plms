@@ -10,8 +10,6 @@ import json
 
 WIKIDATA_PAGES = [
     "Wikidata:Weekly_query_examples",
-    # "Wikidata:Weekly_query_examples/2017",
-    # "Wikidata:Weekly_query_examples/2018",
     "Wikidata:Weekly_query_examples/2019",
     "Wikidata:Weekly_query_examples/2020",
     "Wikidata:Weekly_query_examples/2021",

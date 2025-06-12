@@ -1,24 +1,31 @@
 import time
+import pathlib
 import openai
 
-batch_id = open(".current_batch_id.txt", "r").read()
+BATCH_RESULT_FOLDER = pathlib.Path("./.batch_results")
+BATCH_RESULT_FOLDER.mkdir(exist_ok=True, parents=True)
+# batch_ids: list = [b.strip("\n ") for b in open(".current_batch_queue.txt", "r").readlines()]
 
 client = openai.OpenAI(api_key=open(".api_key", "r").read())
+batches_in_progress = [b.id for b in client.batches.list() if b.status in ("in_progress", "finalizing")]
+remaining_batches = len(batches_in_progress)
 
 
-while True:
-    batch = client.batches.retrieve(batch_id)
-    print(f"Status: {batch.status}")
-    if batch.status == "completed" and batch.output_file_id:
-        output_file_id = batch.output_file_id
-        file_response = client.files.content(output_file_id)
-        file_content = file_response.text
-        with open(".openai_batch_output.jsonl", "wb") as f:
-            f.write(file_content)
-        print("Downloaded batch output to openai_batch_output.jsonl")
-        break
-    elif batch.status in ("failed", "cancelled"):
-        print(f"Batch ended with status: {batch.status}")
-        break
-    else:
-        time.sleep(60)  # Wait a minute before checking again
+while remaining_batches > 0:
+    print(f"Waiting for `{remaining_batches}` batches to complete...")
+    for i, batch_id in enumerate(batches_in_progress):
+        batch = client.batches.retrieve(batch_id)
+        print(f"\t Batch `{batch_id}`: {batch.status}")
+        if batch.status == "completed" and batch.output_file_id:
+            output_file_id = batch.output_file_id
+            file_response = client.files.content(output_file_id)
+            file_content = file_response.text
+            out_file_name = BATCH_RESULT_FOLDER.joinpath(f"openai_batch_output_{batch_id}.jsonl")
+            with open(out_file_name, "w") as f:
+                f.write(file_content)
+            print(f"Downloaded batch output to {out_file_name}")
+        elif batch.status in ("failed", "cancelled"):
+            print(f"Batch ended with status: {batch.status}")
+    batches_in_progress = [b.id for b in client.batches.list() if b.status in ("in_progress", "finalizing")]
+    remaining_batches = len(batches_in_progress)
+    time.sleep(60) # Wait 60 seconds before checking batches again

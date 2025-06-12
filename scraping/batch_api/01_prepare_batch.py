@@ -5,14 +5,10 @@ input_file = "sparql_explain_data.jsonl"
 batch_file = ".openai_batch_input.jsonl"
 
 BATCH_MODEL = "gpt-4.1-mini-2025-04-14"
+TEMPLATE = open(".template.prompt", "r").read()
 
 def build_prompt(query, context):
-    return (
-        "Please explain the following SPARQL query in plain English, "
-        "suitable for a technical blog, in around 300 characters or less. "
-        "If helpful, use the context provided.\n\n"
-        f"Query:\n{query}\n\nContext: {context}"
-    )
+    return TEMPLATE.format(query=query, context=context)
 
 with open(input_file, "r", encoding="utf-8") as fin, \
      open(batch_file, "w", encoding="utf-8") as fout:
