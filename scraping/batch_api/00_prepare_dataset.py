@@ -3,9 +3,20 @@ import glob
 from tqdm import tqdm
 
 # List your source files
+# BASE
+# input_files = [
+#     "../wikidata_weekly_examples_sparql.jsonl",
+#     # add other sources as needed
+# ]
+
+
+# EXTRA
 input_files = [
-    "../wikidata_weekly_examples_sparql.jsonl",
-    "../wikidata_tutorial_examples_sparql.jsonl",
+    "../wikidata_SPARQL_query_service_queries_examples.jsonl",
+    "../wikidata_sparql_tutorial_examples.jsonl",
+    # "../wikidata_weekly_examples_sparql.jsonl",
+    "../wikidata_wikibase_rdf_format_examples.jsonl",
+    "../wikidata_wikibooks_sparql.jsonl"
     # add other sources as needed
 ]
 
