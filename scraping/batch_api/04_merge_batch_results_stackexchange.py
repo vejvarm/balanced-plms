@@ -16,6 +16,7 @@ with open(input_file, "r", encoding="utf-8") as fin:
 merged = defaultdict(list)
 batch_files = sorted(glob.glob(f"{batch_dir}/{subdir}/openai_batch_output_*.jsonl"))
 
+total_count = len(input_data)
 for batch_file in batch_files:
     print(f"Processing: {batch_file}")
     with open(batch_file, "r", encoding="utf-8") as fin:
@@ -41,6 +42,7 @@ for batch_file in batch_files:
                     "batch_file": os.path.basename(batch_file),
                     "prompt_template_index": prompt_template_index
                 })
+                total_count += 1
             except Exception as e:
                 print(f"Skipping malformed line: {e}")
 
@@ -56,4 +58,4 @@ with open(output_file, "w", encoding="utf-8") as fout:
         }
         fout.write(json.dumps(out, ensure_ascii=False) + "\n")
 
-print(f"Wrote merged paraphrases with provenance to {output_file}")
+print(f"Wrote merged paraphrases to {output_file}. The total context sample count is {total_count}.")
