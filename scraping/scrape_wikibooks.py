@@ -3,27 +3,6 @@ from bs4 import BeautifulSoup
 import json
 from tqdm import tqdm
 
-def scrape_wikidata_tutorial():
-    url = "https://www.wikidata.org/wiki/Wikidata:SPARQL_tutorial"
-    soup = BeautifulSoup(requests.get(url).text, "html.parser")
-    examples = []
-    for header in soup.select("h2, h3"):
-        section = header.get_text().strip()
-        pre = header.find_next("pre")
-        if not pre:
-            continue
-        query = pre.get_text().strip()
-        # Grab explanatory context from preceding paragraphs until next pre
-        ctx_parts = []
-        for sib in header.find_next_siblings():
-            if sib == pre:
-                break
-            if sib.name in ("p", "ul", "ol"):
-                ctx_parts.append(sib.get_text().strip())
-        context = section + "\n" + "\n".join(ctx_parts)
-        examples.append({"query": query, "context": context})
-    return examples
-
 def scrape_wikibooks_sparql(start_url="https://en.wikibooks.org/wiki/SPARQL"):
     to_visit = {start_url}
     seen = set()
@@ -55,13 +34,11 @@ def scrape_wikibooks_sparql(start_url="https://en.wikibooks.org/wiki/SPARQL"):
     return examples
 
 # Run scrapers
-wikidata_examples = scrape_wikidata_tutorial()
 wikibooks_examples = scrape_wikibooks_sparql()
 
-print(f"Collected {len(wikidata_examples)} examples from Wikidata tutorial.")
 print(f"Collected {len(wikibooks_examples)} examples from Wikibooks SPARQL.")
 
 # Save combined dataset
 with open("wikidata_wikibooks_sparql.jsonl", "w", encoding="utf-8") as fout:
-    for ex in wikidata_examples + wikibooks_examples:
+    for ex in wikibooks_examples:
         fout.write(json.dumps(ex, ensure_ascii=False) + "\n")
