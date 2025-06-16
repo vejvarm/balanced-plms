@@ -9,32 +9,27 @@ CLIENT_ID = "XTxEyMY7l4xT4TkvvUZ0wg"
 CLIENT_SECRET = "b2xB1EBp--pJhy3mKMi0Tq3I1kOYhg"
 USER_AGENT = "sparql-scraper/0.1 by YOUR_USERNAME"
 
-SUBREDDITS = [
-    "semanticweb",
-    "Wikidata",
-    "KnowledgeGraph",
-    "sparql"
-]
-SEARCH_TERMS = ["sparql", "PREFIX", "wdt:", "rdf", "construct", "ask"]
-MAX_POSTS_PER_SUB = 1000
-MAX_COMMENTS_PER_SUB = 2000
+# SUBREDDITS = [
+#     "semanticweb", "Wikidata", "KnowledgeGraph", "sparql", "datascience", "dataengineering",
+#     "openrefine", "learnprogramming", "learnpython", "dataviz", "AskProgramming", "Database",
+#     "bigdata", "programming", "python", "machinelearning", "opensource", "datasets",
+#     "research", "computerscience", "graphdatabases", "ontologies", "triplydb", "LOD"
+# ]
+SUBREDDITS = ["semanticweb", "Wikidata"]
+SEARCH_TERMS = [s.lower() for s in ["PREFIX", "SELECT", "ASK", "CONSTRUCT", "DESCRIBE", "SERVICE", "wdt:", "rdf:", "FILTER", "GROUP BY", "ORDER BY", "LIMIT"]]
+MAX_POSTS_PER_SUB = 5000
+MAX_COMMENTS_PER_SUB = 10000
 MIN_QUERY_LEN = 30
 
 # Unique keywords that mean "definitely SQL/Cypher" and *not* SPARQL
-SQL_ONLY = {
-    "insert into", "update set", "delete from", "create table", "alter table", "drop table",
-    "truncate table", "auto_increment", "foreign key", "primary key", "on duplicate key", "values ("
-}
-CYPHER_ONLY = {
-    "merge ", "unwind ", "detach delete", "set ", "create (", "with ", "return ", "match ("
-}
+SQL_CYPHER = [s.lower() for s in ["FROM schema", "JOIN", "WHERE", "MATCH", "MERGE", "RETURN", "CREATE", "INSERT", "DELETE"]]
 
 def is_strongly_not_sparql(query, context):
+    return False
     txt = (query + " " + context).lower()
     # Cypher/SQL are case-insensitive, so always lowercased
     return (
-        any(k in txt for k in SQL_ONLY) or
-        any(k in txt for k in CYPHER_ONLY)
+        any(k in txt for k in SQL_CYPHER)
     )
 
 # --- Connect to Reddit API ---
@@ -65,10 +60,13 @@ def extract_code_blocks(text):
 
 def is_sparql(query):
     query_l = query.lower()
-    # Look for strong SPARQL clues, *not* SQL/Cypher
+    # # Accept 'select' alone if not obviously SQL or Cypher
+    # if any(k in query_l for k in SQL_CYPHER):
+    #     return False
+    # Accept if it has SELECT or ASK or CONSTRUCT or PREFIX
     return (
-        ("prefix" in query_l or "wdt:" in query_l or "construct" in query_l or "ask" in query_l or "select" in query_l)
-        and "{" in query_l
+        any(term in query_l for term in ("select", "ask", "construct", "prefix", "wdt:"))
+        and len(query_l) >= MIN_QUERY_LEN
     )
 
 def clean_context(text, code_blocks):
@@ -130,7 +128,7 @@ for sub in SUBREDDITS:
     # --- Submissions ---
     for term in SEARCH_TERMS:
         try:
-            for submission in tqdm(subreddit.search(term, sort="new", limit=MAX_POSTS_PER_SUB), desc=f"{sub}-search-{term}"):
+            for submission in tqdm(subreddit.search(term, sort="relevance", limit=MAX_POSTS_PER_SUB), desc=f"{sub}-search-{term}"):
                 body = (submission.selftext or "") + "\n" + (submission.title or "")
                 metadata = {
                     "subreddit": sub,
