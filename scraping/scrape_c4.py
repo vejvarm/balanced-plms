@@ -43,6 +43,10 @@ def clear_cache():
     if os.path.exists(cache_dir):
         print(f"Clearing cache at {cache_dir}")
         shutil.rmtree(cache_dir)
+    hub_dir = os.path.expanduser(os.environ.get("HF_HOME", "~/.cache/huggingface/hub")+"/hub/")
+    if os.path.exists(hub_dir):
+        print(f"Clearing cache at {hub_dir}")
+        shutil.rmtree(hub_dir)
 
 def main(
     outfile="c4_sparql.arrow",
@@ -66,7 +70,7 @@ def main(
         print("Estimated documents in split: Unknown")
 
     # Create a subfolder for each dataset_part inside the './c4' directory
-    output_folder = f"./c4/dataset_part_{dataset_part:03d}"
+    output_folder = f"./c4/dataset_part_{dataset_part}"
     os.makedirs(output_folder, exist_ok=True)
 
     if streaming:
@@ -121,7 +125,7 @@ def main(
                 print(msg)
             finally:
                 # Save the final dataset to disk in Arrow format in the correct subfolder
-                output_file = os.path.join(output_folder, f"c4_sparql_{dataset_part:03d}.arrow")
+                output_file = os.path.join(output_folder, f"c4_sparql_{dataset_part}.arrow")
                 dataset.save_to_disk(output_file)
                 with open(checkpoint_file, "w") as fcp:
                     fcp.write(f"{idx+1},{saved}")
@@ -138,7 +142,7 @@ def main(
         if max_examples:
             filtered_ds = filtered_ds.select(range(min(max_examples, len(filtered_ds))))
         saved = len(filtered_ds)
-        outfile = os.path.join(output_folder, f"c4_sparql_{dataset_part:03d}.json")
+        outfile = os.path.join(output_folder, f"c4_sparql_{dataset_part}.json")
         print(f"Saving {saved} documents to {outfile} ...")
         filtered_ds.to_json(outfile, num_proc=num_proc)
         print(f"Finished! Total saved: {saved}")
@@ -151,6 +155,10 @@ if __name__ == "__main__":
     streaming = False
     resume_download = False
     num_proc = os.cpu_count()
-    for dataset_part in range(0, 72):  # Adjust this range to the number of parts you have
-        data_files = {'train': f"en.noclean/c4-train.{dataset_part:03d}*-of-07168.json.gz"}
+    start = 0
+    total_parts = 72
+    for part in range(start, total_parts):  # Adjust this range to the number of parts you have
+        dataset_part = f"{part:03d}"
+        print(f"Processing part `{dataset_part}/{total_parts:03d}`")
+        data_files = {'train': f"en.noclean/c4-train.{dataset_part}*-of-07168.json.gz"}
         main(variant=variant, data_files=data_files, streaming=streaming, resume_download=resume_download, num_proc=num_proc, dataset_part=dataset_part)
