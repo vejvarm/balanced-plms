@@ -5,6 +5,11 @@ from tqdm import tqdm
 from itertools import islice
 import os
 from datetime import datetime
+import shutil
+
+os.environ["HF_HOME"] = "~/temp/.cache/hub/"
+os.environ["HF_HUB_OFFLINE"] = "0"  # Set this to "1" to force downloading in online mode
+os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = str(200_000_000)
 
 def log(msg: str):
     with open("c4_progress.log", "a") as f:
@@ -14,7 +19,7 @@ def log(msg: str):
 C4_LENGTHS = {
     "en": 365_000_000,
     "en.noblocklist": 395_000_000,
-    "en.noclean": 1_100_000_000
+    "en.noclean": 1_100_000_000,
 }
 
 FORM_KEYWORDS_RE = re.compile(r"\b(select|ask|construct|describe)\b")
@@ -32,30 +37,37 @@ def looks_like_sparql(sample):
         return False
     return True
 
+def clear_cache():
+    """Clears the Hugging Face cache to free up space."""
+    cache_dir = os.path.expanduser(os.environ.get("HF_HOME", "~/.cache/huggingface/hub")+"/datasets/")
+    if os.path.exists(cache_dir):
+        print(f"Clearing cache at {cache_dir}")
+        shutil.rmtree(cache_dir)
+
 def main(
-    outfile="c4_sparql.jsonl",
+    outfile="c4_sparql.arrow",
     max_examples=None,
     variant="en.noclean",
+    data_files=None,
     checkpoint_file="c4_progress.csv",
     streaming=True,
     num_proc=None,
     resume_download=False,
+    dataset_part=None
 ):
-    """Scrape SPARQL-like documents from the C4 dataset.
-
-    When ``streaming`` is ``True`` (default), the dataset is streamed and the
-    script resumes progress via ``checkpoint_file``. When ``streaming`` is
-    ``False``, the dataset is loaded entirely and filtered in parallel using
-    ``datasets.Dataset.filter`` before being written out.
-    """
+    """Scrape SPARQL-like documents from the C4 dataset and save in Arrow format."""
 
     print(f"Loading C4 dataset with variant: {variant}, streaming={streaming} ...")
-    ds = load_dataset("allenai/c4", variant, split="train", streaming=streaming, download_config=DownloadConfig(resume_download=resume_download, num_proc=num_proc))
+    ds = load_dataset("allenai/c4", variant, data_files=data_files, split='train', streaming=streaming, verification_mode="no_checks", download_config=DownloadConfig(resume_download=resume_download, num_proc=num_proc))
     total = C4_LENGTHS.get(variant, None)
     if total:
         print(f"Estimated documents in split: {total}")
     else:
         print("Estimated documents in split: Unknown")
+
+    # Create a subfolder for each dataset_part inside the './c4' directory
+    output_folder = f"./c4/dataset_part_{dataset_part:03d}"
+    os.makedirs(output_folder, exist_ok=True)
 
     if streaming:
         # --- Load last progress (document index, saved count) ---
@@ -79,8 +91,11 @@ def main(
                 for idx, sample in enumerate(islice(ds, idx, None), start=idx):
                     pbar.update(1)
                     if looks_like_sparql(sample):
-                        with open(outfile, "a", encoding="utf-8") as fout:
-                            fout.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
+                        # Save directly to Arrow format
+                        if 'dataset' not in locals():
+                            dataset = ds.select([idx])  # Initialize the dataset with the first match
+                        else:
+                            dataset = dataset.add_item(sample)  # Add more matches to the dataset
                         saved += 1
                         pbar.set_postfix(saved=saved)
                     # Save checkpoint every 500000 docs or on match
@@ -105,12 +120,17 @@ def main(
                 log(msg)
                 print(msg)
             finally:
+                # Save the final dataset to disk in Arrow format in the correct subfolder
+                output_file = os.path.join(output_folder, f"c4_sparql_{dataset_part:03d}.arrow")
+                dataset.save_to_disk(output_file)
                 with open(checkpoint_file, "w") as fcp:
                     fcp.write(f"{idx+1},{saved}")
                 print(f"Checkpoint saved at doc {idx+1}, saved={saved}")
 
-        print(f"Finished! Total saved: {saved}")
+                # Clear the cache to save space
+                clear_cache()
 
+        print(f"Finished! Total saved: {saved}")
     else:
         num_proc = num_proc or os.cpu_count()
         print(f"Filtering dataset with num_proc={num_proc} ...")
@@ -118,12 +138,19 @@ def main(
         if max_examples:
             filtered_ds = filtered_ds.select(range(min(max_examples, len(filtered_ds))))
         saved = len(filtered_ds)
+        outfile = os.path.join(output_folder, f"c4_sparql_{dataset_part:03d}.json")
         print(f"Saving {saved} documents to {outfile} ...")
         filtered_ds.to_json(outfile, num_proc=num_proc)
         print(f"Finished! Total saved: {saved}")
 
+        # Clear the cache after saving
+        clear_cache()
+
 if __name__ == "__main__":
-    variant = "en"
+    variant = "en.noclean"
     streaming = False
+    resume_download = False
     num_proc = os.cpu_count()
-    main(variant=variant, streaming=streaming, num_proc=num_proc)
+    for dataset_part in range(0, 72):  # Adjust this range to the number of parts you have
+        data_files = {'train': f"en.noclean/c4-train.{dataset_part:03d}*-of-07168.json.gz"}
+        main(variant=variant, data_files=data_files, streaming=streaming, resume_download=resume_download, num_proc=num_proc, dataset_part=dataset_part)
