@@ -36,65 +36,90 @@ def main(
     outfile="c4_sparql.jsonl",
     max_examples=None,
     variant="en.noclean",
-    checkpoint_file="c4_progress.csv"
+    checkpoint_file="c4_progress.csv",
+    streaming=True,
+    num_proc=None,
 ):
-    print(f"Loading C4 dataset stream with variant: {variant} ...")
-    ds = load_dataset("allenai/c4", variant, split="train", streaming=True)
+    """Scrape SPARQL-like documents from the C4 dataset.
+
+    When ``streaming`` is ``True`` (default), the dataset is streamed and the
+    script resumes progress via ``checkpoint_file``. When ``streaming`` is
+    ``False``, the dataset is loaded entirely and filtered in parallel using
+    ``datasets.Dataset.filter`` before being written out.
+    """
+
+    print(f"Loading C4 dataset with variant: {variant}, streaming={streaming} ...")
+    ds = load_dataset("allenai/c4", variant, split="train", streaming=streaming)
     total = C4_LENGTHS.get(variant, None)
-    print(f"Estimated documents in split: {total if total else 'Unknown'}")
+    if total:
+        print(f"Estimated documents in split: {total}")
+    else:
+        print("Estimated documents in split: Unknown")
 
-    # --- Load last progress (document index, saved count) ---
-    finished = False
-    while not finished:
-        idx = 0
-        saved = 0
-        if os.path.exists(checkpoint_file):
+    if streaming:
+        # --- Load last progress (document index, saved count) ---
+        finished = False
+        while not finished:
+            idx = 0
+            saved = 0
+            if os.path.exists(checkpoint_file):
+                try:
+                    with open(checkpoint_file) as f:
+                        vals = f.read().strip().split(",")
+                        idx = int(vals[0]) - 1
+                        saved = int(vals[1]) if len(vals) > 1 else 0
+                    print(f"Resuming from doc {idx}, previously saved {saved}")
+                except Exception as e:
+                    print(f"Could not read checkpoint file, starting from scratch: {e}")
+
+            # --- Iterate from last doc using islice ---
+            pbar = tqdm(total=total, initial=idx, unit="docs", desc="Scanning C4", dynamic_ncols=True)
             try:
-                with open(checkpoint_file) as f:
-                    vals = f.read().strip().split(",")
-                    idx = int(vals[0]) - 1
-                    saved = int(vals[1]) if len(vals) > 1 else 0
-                print(f"Resuming from doc {idx}, previously saved {saved}")
+                for idx, sample in enumerate(islice(ds, idx, None), start=idx):
+                    pbar.update(1)
+                    if looks_like_sparql(sample):
+                        with open(outfile, "a", encoding="utf-8") as fout:
+                            fout.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
+                        saved += 1
+                        pbar.set_postfix(saved=saved)
+                    # Save checkpoint every 500000 docs or on match
+                    if idx % 500000 == 0 or (max_examples and saved >= max_examples):
+                        with open(checkpoint_file, "w") as fcp:
+                            fcp.write(f"{idx+1},{saved}")
+                    if max_examples and saved >= max_examples:
+                        print("Reached max_examples cap, exiting.")
+                        break
+            except KeyboardInterrupt:
+                msg = f"({idx+1},{saved}) Interrupted, saving progress..."
+                log(msg)
+                print(msg)
+                finished = True
+            except StopIteration:
+                msg = f"({idx+1},{saved}) Finished, saving progress..."
+                log(msg)
+                print(msg)
+                finished = True
             except Exception as e:
-                print(f"Could not read checkpoint file, starting from scratch: {e}")
+                msg = f"({idx+1},{saved}) General Exception {repr(e)}"
+                log(msg)
+                print(msg)
+            finally:
+                with open(checkpoint_file, "w") as fcp:
+                    fcp.write(f"{idx+1},{saved}")
+                print(f"Checkpoint saved at doc {idx+1}, saved={saved}")
 
-        # --- Iterate from last doc using islice ---
-        pbar = tqdm(total=total, initial=idx, unit="docs", desc="Scanning C4", dynamic_ncols=True)
-        try:
-            for idx, sample in enumerate(islice(ds, idx, None), start=idx):
-                pbar.update(1)
-                if looks_like_sparql(sample):
-                    with open(outfile, "a", encoding="utf-8") as fout:
-                        fout.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
-                    saved += 1
-                    pbar.set_postfix(saved=saved)
-                # Save checkpoint every 500000 docs or on match
-                if idx % 500000 == 0 or (max_examples and saved >= max_examples):
-                    with open(checkpoint_file, "w") as fcp:
-                        fcp.write(f"{idx+1},{saved}")
-                if max_examples and saved >= max_examples:
-                    print("Reached max_examples cap, exiting.")
-                    break
-        except KeyboardInterrupt:
-            msg = f"({idx+1},{saved}) Interrupted, saving progress..."
-            log(msg)
-            print(msg)
-            finished = True
-        except StopIteration:
-            msg = f"({idx+1},{saved}) Finished, saving progress..."
-            log(msg)
-            print(msg)
-            finished = True
-        except Exception as e:
-            msg = f"({idx+1},{saved}) General Exception {repr(e)}"
-            log(msg)
-            print(msg)
-        finally:
-            with open(checkpoint_file, "w") as fcp:
-                fcp.write(f"{idx+1},{saved}")
-            print(f"Checkpoint saved at doc {idx+1}, saved={saved}")
+        print(f"Finished! Total saved: {saved}")
 
-    print(f"Finished! Total saved: {saved}")
+    else:
+        num_proc = num_proc or os.cpu_count()
+        print(f"Filtering dataset with num_proc={num_proc} ...")
+        filtered_ds = ds.filter(looks_like_sparql, num_proc=num_proc)
+        if max_examples:
+            filtered_ds = filtered_ds.select(range(min(max_examples, len(filtered_ds))))
+        saved = len(filtered_ds)
+        print(f"Saving {saved} documents to {outfile} ...")
+        filtered_ds.to_json(outfile, num_proc=num_proc)
+        print(f"Finished! Total saved: {saved}")
 
 if __name__ == "__main__":
     main()
