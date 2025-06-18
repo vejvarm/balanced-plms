@@ -1,6 +1,6 @@
 import json
 import re
-from datasets import load_dataset
+from datasets import load_dataset, DownloadConfig
 from tqdm import tqdm
 from itertools import islice
 import os
@@ -39,6 +39,7 @@ def main(
     checkpoint_file="c4_progress.csv",
     streaming=True,
     num_proc=None,
+    resume_download=False,
 ):
     """Scrape SPARQL-like documents from the C4 dataset.
 
@@ -49,7 +50,7 @@ def main(
     """
 
     print(f"Loading C4 dataset with variant: {variant}, streaming={streaming} ...")
-    ds = load_dataset("allenai/c4", variant, split="train", streaming=streaming)
+    ds = load_dataset("allenai/c4", variant, split="train", streaming=streaming, download_config=DownloadConfig(resume_download=resume_download, num_proc=num_proc))
     total = C4_LENGTHS.get(variant, None)
     if total:
         print(f"Estimated documents in split: {total}")
@@ -122,4 +123,7 @@ def main(
         print(f"Finished! Total saved: {saved}")
 
 if __name__ == "__main__":
-    main()
+    variant = "en"
+    streaming = False
+    num_proc = os.cpu_count()
+    main(variant=variant, streaming=streaming, num_proc=num_proc)
