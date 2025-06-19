@@ -155,7 +155,7 @@ if __name__ == "__main__":
     streaming = False
     resume_download = False
     num_proc = os.cpu_count()
-    start = 69
+    start = 0
     total_parts = 72
     for part in range(start, total_parts):  # Adjust this range to the number of parts you have
         dataset_part = f"{part:03d}"
