@@ -16,3 +16,4 @@ openai
 tqdm
 beautifulsoup4
 praw
+rdflib
