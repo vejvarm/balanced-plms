@@ -142,7 +142,7 @@ def main(
         if max_examples:
             filtered_ds = filtered_ds.select(range(min(max_examples, len(filtered_ds))))
         saved = len(filtered_ds)
-        outfile = os.path.join(output_folder, f"c4_sparql_{dataset_part}.json")
+        outfile = os.path.join(output_folder, f"c4_sparql_{dataset_part}.jsonl")
         print(f"Saving {saved} documents to {outfile} ...")
         filtered_ds.to_json(outfile, num_proc=num_proc)
         print(f"Finished! Total saved: {saved}")
@@ -155,7 +155,7 @@ if __name__ == "__main__":
     streaming = False
     resume_download = False
     num_proc = os.cpu_count()
-    start = 0
+    start = 69
     total_parts = 72
     for part in range(start, total_parts):  # Adjust this range to the number of parts you have
         dataset_part = f"{part:03d}"
