@@ -180,3 +180,4 @@ cython_debug/
 .pypirc
 scraping/batch_api/.*
 scraping/*.json*
+scraping/batch_api/*.jsonl
