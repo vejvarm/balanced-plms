@@ -16,18 +16,18 @@ def build_text(example):
 
 def main():
     parser = argparse.ArgumentParser(description="Tokenize and group SPARQL explanation data")
-    parser.add_argument("--input_file", default="sparql_explain_data.jsonl")
+    parser.add_argument("--input-file", default="sparql_explain_data.jsonl")
     parser.add_argument(
-        "--output_dir",
+        "--output-dir",
         default="sparql_explain_arrow",
         help="Directory where the arrow dataset will be saved"
     )
-    parser.add_argument("--model_name", default="google-t5/t5-base")
-    parser.add_argument("--block_size", type=int, default=512)
-    parser.add_argument("--num_proc", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--model-name", default="google-t5/t5-base")
+    parser.add_argument("--block-size", type=int, default=512)
+    parser.add_argument("--num-proc", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument(
-        "--dev_size",
+        "--dev-size",
         type=int,
         default=100,
         help="Number of samples to hold out for validation"
