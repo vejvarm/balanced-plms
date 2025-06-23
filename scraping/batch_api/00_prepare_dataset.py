@@ -31,10 +31,10 @@ input_files = [
     "../wikidata_weekly_examples_sparql.jsonl",
     "../wikidata_wikibase_rdf_format_examples.jsonl",
     "../wikidata_wikibooks_sparql.jsonl",
-    "../v1/LSQv2/part1_stratified/LSQv2_Easy.jsonl",
-    "../v1/LSQv2/part1_stratified/LSQv2_Medium.jsonl",
-    "../v1/LSQv2/part1_stratified/LSQv2_Hard.jsonl",
-    "../v1/LSQv2/part1_stratified/LSQv2_ExtraHard.jsonl",
+    "../v1/LSQv2/LSQv2_Easy.jsonl",
+    "../v1/LSQv2/LSQv2_Medium.jsonl",
+    "../v1/LSQv2/LSQv2_Hard.jsonl",
+    "../v1/LSQv2/LSQv2_ExtraHard.jsonl",
     # add other sources as needed
 ]
 

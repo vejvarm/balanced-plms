@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 from datasets import load_from_disk, concatenate_datasets
 import numpy as np
@@ -44,8 +45,17 @@ def main():
 
     merged = concatenate_datasets([owt_kept, sparql_sample]).shuffle(seed=args.seed)
 
+    stats = {
+        "num_replaced": len(replace_indices),
+        "num_kept": len(owt_kept),
+        "num_injected": len(sparql_sample),
+        "total_after_injection": len(merged)
+    }
+    print(stats)
+
     os.makedirs(args.output_dir, exist_ok=True)
     merged.save_to_disk(os.path.join(args.output_dir, "final_clean_grouped"))
+    json.dump(stats, open(os.path.join(args.output_dir, "final_stats.json"), "w"), indent=4)
     # copy dev split
     dev = load_from_disk(dev_path)
     dev_out = os.path.join(args.output_dir, "shared_dev_grouped")
