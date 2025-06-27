@@ -26,6 +26,7 @@
     "mean_noise_span_length": 3.0,
     "max_seq_length": 512,
     "seed": 42,
+    "bf16": false,
     "fp16": true,
     "overwrite_output_dir": false,
     "resume_from_checkpoint": false,

@@ -99,6 +99,7 @@ training_args = TrainingArguments(
     metric_for_best_model="loss",
     greater_is_better=False,
     fp16=config_args.get("fp16", False),
+    bf16=config_args.get("bf16", False),
     logging_dir="../logs",
     report_to=["wandb"],
 )
