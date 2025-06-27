@@ -4,9 +4,6 @@ import pathlib
 from datasets import load_from_disk, concatenate_datasets
 from data_utils import load_config
 
-# TODO: this
-# TODO: dirty
-# TODO: injected
 
 def main(args):
     config_args = load_config(args.ds)
