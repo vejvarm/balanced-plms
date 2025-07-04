@@ -7,9 +7,9 @@ import numpy as np
 
 def main():
     parser = argparse.ArgumentParser(description="Inject SPARQL explanation blocks into OpenWebText")
-    parser.add_argument("--owt_dir", default="/work/datasets/openwebtext-preproc", help="Path to openwebtext preprocessed dataset")
-    parser.add_argument("--sparql_dir", default="/work/datasets/sparql_explain_arrow", help="Path to SPARQL Arrow dataset")
-    parser.add_argument("--output_dir", default="/work/datasets/openwebtext-injected-SPARQL-10p", help="Output directory")
+    parser.add_argument("--owt-dir", default="/work/datasets/openwebtext-preproc", help="Path to openwebtext preprocessed dataset")
+    parser.add_argument("--sparql-dir", default="/work/datasets/sparql_explain_arrow", help="Path to SPARQL Arrow dataset")
+    parser.add_argument("--output-dir", default="/work/datasets/openwebtext-injected-SPARQL-10p", help="Output directory")
     parser.add_argument("--proportion", type=float, default=0.1, help="Proportion of OpenWebText blocks to replace")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()

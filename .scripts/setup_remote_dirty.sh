@@ -2,7 +2,7 @@
 
 # --- Variables ---
 REMOTE_USER="ubuntu"
-REMOTE_IP="192.222.53.13"
+REMOTE_IP="192.222.50.156"
 PEM="~/.ssh/freya.pem"
 REMOTE_BASE="~/git"
 REMOTE_PROJ="$REMOTE_BASE/balanced-plms"
@@ -28,19 +28,19 @@ mkdir -p pretraining/configs
 mkdir -p results/t5
 EOF
 
-# --- 2. Copy owt-injected.tgz and config ---
+# --- 2. Copy owt-preproc.tgz and config ---
 scp -i "$PEM" "$LOCAL_CONFIG" $REMOTE_USER@$REMOTE_IP:$REMOTE_PROJ/pretraining/configs/ &
 scp -i "$PEM" "$LOCAL_MODEL" $REMOTE_USER@$REMOTE_IP:$REMOTE_PROJ/results/t5/ &
 scp -i "$PEM" "$LOCAL_DATA" $REMOTE_USER@$REMOTE_IP:$REMOTE_PROJ/datasets/openwebtext/
 
-# --- 3. Unpack owt-injected.tgz on remote ---
+# --- 3. Unpack owt-preproc.tgz on remote ---
 ssh -i "$PEM" $REMOTE_USER@$REMOTE_IP <<'EOF'
 cd ~/git/balanced-plms/results/t5
 tar xzvf ut5-ep15-base.tgz
 rm -rf ut5-ep15-base.tgz
 cd ~/git/balanced-plms/datasets/openwebtext
-tar xzvf owt-injected.tgz
-rm -rf owt-injected.tgz
+tar xzvf owt-preproc.tgz
+rm -rf owt-preproc.tgz
 EOF
 
 echo "Setup of $REMOTE_USER@$REMOTE_IP finished" | mail -s "Server setup complete!" vejvar-martin-km@ynu.jp
