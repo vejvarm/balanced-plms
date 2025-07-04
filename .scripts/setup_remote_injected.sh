@@ -21,7 +21,7 @@ cd balanced-plms
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-lambda.txt
 wandb login 647dd79b7e09bbee2824b0d06ec9ece9a9cbba66 --relogin
 mkdir -p datasets/openwebtext
 mkdir -p pretraining/configs
