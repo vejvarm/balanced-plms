@@ -1,9 +1,9 @@
 import openai
 import pathlib
 
-openai.api_key = open(".api_key", "r").read().strip()
+openai.api_key = open("../batch_api/.api_key", "r").read().strip()
 
-BATCHES_DIR = pathlib.Path(".batches")
+BATCHES_DIR = pathlib.Path("v2.1_expand/.batches")
 file_id_log_path = ".current_file_id.txt"
 batch_id_log_path = ".current_batch_queue.txt"
 

@@ -10,6 +10,7 @@ from transformers import (
 )
 from datasets import load_from_disk
 from collators import DataCollatorForT5MLM
+from data_utils import load_config
 
 # To resume from checkpoint with PyTorch > 2.6
 # Allow torch.load to unpickle numpy._core.multiarray._reconstruct
@@ -20,21 +21,21 @@ torch.serialization.add_safe_globals([_reconstruct, ndarray])
 import argparse
 
 parser = argparse.ArgumentParser(description="Preprocess and filter a dataset into unbiased verison.")
-parser.add_argument("ds", type=str, help="Dataset to be prepared.", choices=("openwebtext", "openwebtext-10k", "realnewslike"))
+parser.add_argument(
+    "ds",
+    type=str,
+    help="Dataset config key to train on.",
+    choices=(
+        "openwebtext",
+        "openwebtext-10k",
+        "openwebtext-dirty",
+        "openwebtext-injected",
+        "realnewslike",
+        "c4-dirty",
+    ),
+)
 args = parser.parse_args()
-
-if args.ds == "openwebtext":
-    cfg_path = "./configs/00_config_openwebtext.json"
-elif args.ds == "openwebtext-10k":
-    cfg_path = "./configs/00_config_openwebtext-10k.json"
-elif args.ds == "realnewslike":
-    cfg_path = "./configs/00_config_c4-realnewslike.json"
-else:
-    raise NotImplementedError("Supported datasets are (openwebtext, openwebtext-10k, realnewslike).")
-
-# Load configuration from JSON file.
-with open(cfg_path, "r") as f:
-    config_args = json.load(f)
+config_args = load_config(args.ds)
 
 max_seq_length = config_args.get("max_seq_length", 512)
 

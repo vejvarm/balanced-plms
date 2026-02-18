@@ -29,8 +29,13 @@ def load_config(ds: str) -> dict:
     cfg_mapping = {
         "openwebtext": "./configs/00_config_openwebtext.json",
         "openwebtext-10k": "./configs/00_config_openwebtext-10k.json",
-        "realnewslike": "./configs/00_config_c4-realnewslike.json"
+        "openwebtext-dirty": "./configs/00_config_openwebtext-dirty.json",
+        "openwebtext-injected": "./configs/00_config_openwebtext-injected.json",
+        "realnewslike": "./configs/00_config_c4-realnewslike.json",
+        "c4-dirty": "./configs/00_config_c4-dirty.json",
     }
+    if ds not in cfg_mapping:
+        raise ValueError(f"Unknown dataset key '{ds}'. Available: {sorted(cfg_mapping.keys())}")
     with open(cfg_mapping[ds]) as f:
         return json.load(f)
 
@@ -104,6 +109,72 @@ query_keywords = [
     "RETURN", "INSERT", "DELETE", "SQL", "SPARQL", "CYPHER"
 ]
 
+AMBIGUOUS_QUERY_KEYWORDS = {"SELECT", "MATCH", "WHERE", "JOIN", "OPTIONAL", "FILTER", "RETURN"}
+
+# A stricter audit detector used for analysis/reporting to estimate query leakage.
+STRICT_QL_PATTERNS = [
+    (
+        r"\bSELECT\b[\s\S]{0,250}?\bFROM\b[\s\S]{0,180}?"
+        r"(?:\bWHERE\b|\bJOIN\b|\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|;)",
+        "SQL",
+    ),
+    (r"\bINSERT\s+INTO\b[\s\S]{0,200}?(?:\bVALUES\b|\bSELECT\b|\bSET\b)", "SQL"),
+    (r"\bUPDATE\s+[A-Z_][\w\.]{0,120}\s+\bSET\b[\s\S]{0,200}?=", "SQL"),
+    (r"\bDELETE\s+FROM\b[\s\S]{0,200}?(?:\bWHERE\b|;)", "SQL"),
+    (r"\bCREATE\s+(TABLE|VIEW|INDEX)\b[\s\S]{0,200}?(?:\(|\bAS\b|\bON\b)", "SQL"),
+    (r"\bALTER\s+TABLE\b[\s\S]{0,200}?(?:\bADD\b|\bDROP\b|\bALTER\b)", "SQL"),
+    (r"\bDROP\s+(TABLE|VIEW|INDEX)\b\s+[A-Z_][\w\.]{0,120}", "SQL"),
+    (r"\bPREFIX\b\s+\w*:\s*<[^>]+>", "SPARQL"),
+    (r"\bSELECT\b[\s\S]{0,300}?\bWHERE\b\s*[{]", "SPARQL"),
+    (r"\bASK\b[\s\S]{0,300}?\bWHERE\b\s*[{]", "SPARQL"),
+    (r"\bCONSTRUCT\b[\s\S]{0,300}?\bWHERE\b\s*[{]", "SPARQL"),
+    (r"\bDESCRIBE\b[\s\S]{0,300}?\bWHERE\b\s*[{]", "SPARQL"),
+    (r"\bMATCH\b[\s\S]{0,220}?\([^)]+\)[\s\S]{0,220}?\bRETURN\b", "Cypher"),
+    (r"\bOPTIONAL\s+MATCH\b\s*\([^)]+\)", "Cypher"),
+    (r"\bMERGE\b\s*\([^)]+\)[\s\S]{0,220}?\bRETURN\b", "Cypher"),
+]
+
+def detect_filter_signals(text):
+    tokens_upper = re.findall(r"\w+", text.upper())
+    token_counts = Counter(tokens_upper)
+    keyword_counts = {kw: token_counts[kw] for kw in query_keywords if token_counts[kw] > 0}
+
+    regex_lang = ""
+    matched_substring = ""
+    for pattern, lang in QL_PATTERNS:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            regex_lang = lang
+            matched_substring = match.group(0)
+            break
+
+    filters_triggered = []
+    if keyword_counts:
+        filters_triggered.append("keyword")
+    if regex_lang:
+        filters_triggered.append("regex")
+
+    return {
+        "filters_triggered": filters_triggered,
+        "ql_type": regex_lang,
+        "matched_substring": matched_substring,
+        "keyword_counts": keyword_counts,
+    }
+
+def detect_strict_query_types(text):
+    matched = []
+    for pattern, lang in STRICT_QL_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE):
+            matched.append(lang)
+    # Preserve deterministic order and uniqueness (SQL, SPARQL, Cypher)
+    seen = set()
+    unique = []
+    for lang in matched:
+        if lang not in seen:
+            seen.add(lang)
+            unique.append(lang)
+    return unique
+
 def filter_and_annotate(examples, tokenizer=None):
     texts = examples["text"]
     tokenized = tokenizer(texts, add_special_tokens=False, truncation=False)
@@ -113,25 +184,11 @@ def filter_and_annotate(examples, tokenizer=None):
     matched_substring_list = []
     keyword_counts_list = []
     for text in texts:
-        filters_triggered = []
-        ql_type = None
-        matched_substring = None
-        tokens_upper = re.findall(r'\w+', text.upper())
-        token_counts = Counter(tokens_upper)
-        keyword_counts = {kw: token_counts[kw] for kw in query_keywords if token_counts[kw] > 0}
-        if keyword_counts:
-            filters_triggered.append("keyword")
-        for pattern, lang in QL_PATTERNS:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                filters_triggered.append("regex")
-                ql_type = lang
-                matched_substring = match.group(0)
-                break
-        filters_triggered_list.append(filters_triggered)
-        ql_type_list.append(ql_type or "")
-        matched_substring_list.append(matched_substring or "")
-        keyword_counts_list.append(json.dumps(keyword_counts))
+        signals = detect_filter_signals(text)
+        filters_triggered_list.append(signals["filters_triggered"])
+        ql_type_list.append(signals["ql_type"])
+        matched_substring_list.append(signals["matched_substring"])
+        keyword_counts_list.append(json.dumps(signals["keyword_counts"]))
     return {
         "filters_triggered": filters_triggered_list,
         "ql_type": ql_type_list,
